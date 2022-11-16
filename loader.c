@@ -18,13 +18,16 @@
  */
 #define xstr(s) str(s)
 #define str(s)  #s
-#define dbglvl_help   "The verbosity of debug messages (" xstr(0) \
+#define dbglvl_help     "The verbosity of debug messages (" xstr(0) \
                           "~" xstr(3) ")."
+
+#define inf_help        "The name of interface to use."
 
 /* DATA TYPE DECLARATIONS
  */
 typedef struct {
     int     debuglvl;
+    int     if_idx;
 } arguments_t;
 
 
@@ -36,7 +39,8 @@ static arguments_t loader_arguments = {
 
 static struct argp_option loader_options[] =
 {
-    { "debuglvl", 'd', "DEBUGLVL", 0, dbglvl_help, 0 },
+    { "debuglvl", 'd', "DEBUGLVL",  0, dbglvl_help, 0 },
+    { "inf",      'i', "interface", 0, inf_help,    0 },
     { 0 }                                                                                           };
 
 /* Parse a single option. */
@@ -53,9 +57,16 @@ loader_parse_opt(int key, char *arg, struct argp_state *state)
         errno = 0;
 
         arguments_p->debuglvl = strtoul(arg, NULL, 0);
-        if (errno != 0)
-        {
+        if (errno != 0) {
             argp_error(state, "Invalid debuglvl \"%s\"", arg);
+            return errno;
+        }
+        break;
+
+    case 'i':
+        arguments_p->if_idx = if_nametoindex(arg);
+        if (errno != 0) {
+            argp_error(state, "Invalid interface name \"%s\"", arg);
             return errno;
         }
         break;
@@ -166,9 +177,9 @@ static int xdp_link_detach(int ifindex, __u32 xdp_flags)
 }
 
 int main(int argc, char **argv) {
-    struct rlimit r = {RLIM_INFINITY, RLIM_INFINITY};	
+    struct rlimit r = {RLIM_INFINITY, RLIM_INFINITY};
     char filename[256] = "program.o";
-	int ifIndex = 3; // ip link show
+//	int ifIndex = 3; // ip link show
 	int prog_fd, err;
 
     /* Our argp parser. */
@@ -178,11 +189,11 @@ int main(int argc, char **argv) {
      * reflected in arguments.
      */
     argp_parse(&argp, argc, argv, 0, 0, &loader_arguments);
-	
+
     if (setrlimit(RLIMIT_MEMLOCK, &r)) {
         perror("setrlimit(RLIMIT_MEMLOCK)");
         return -1;
-    } 
+    }
 
 	/* Load the BPF-ELF object file and get back first BPF_prog FD */
 	prog_fd = load_bpf_object_file__simple(filename);
@@ -193,10 +204,10 @@ int main(int argc, char **argv) {
 	printf("Program loaded with id: %d\n", prog_fd);
 
 	/* Attach XDP to interface  */
-	err = xdp_link_attach(ifIndex, XDP_FLAGS_UPDATE_IF_NOEXIST, prog_fd);
+	err = xdp_link_attach(loader_arguments.if_idx, XDP_FLAGS_UPDATE_IF_NOEXIST, prog_fd);
 	if (err)
 		return err;
-	printf("XDP attatched to %d interface\n", ifIndex);
+	printf("XDP attatched to %d interface\n", loader_arguments.if_idx);
 
 	/* Keep going */
 	signal(SIGINT, sig_handler);
@@ -206,6 +217,6 @@ int main(int argc, char **argv) {
 	printf("Stopped, start to unload BPF\n");
 
 	/* Detach XDP from interface */
-	xdp_link_detach(ifIndex, XDP_FLAGS_UPDATE_IF_NOEXIST);
+	xdp_link_detach(loader_arguments.if_idx, XDP_FLAGS_UPDATE_IF_NOEXIST);
 	printf("Done\n");
 }
