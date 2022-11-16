@@ -14,12 +14,14 @@
 #include <stdint.h>
 #include <arpa/inet.h>
 
+#include "xdp_cut_pkt_def.h"
+
 // Creates maps, specify name, type, key/value size, and map size.
 struct bpf_map_def SEC("maps") sip_filter = {
 	.type = BPF_MAP_TYPE_HASH,
 	.key_size = sizeof(uint32_t),
 	.value_size = sizeof(uint32_t),
-	.max_entries = 1024,
+	.max_entries = MAX_NBR_SIP_TBL,
 };
 
 struct bpf_map_def SEC("maps") mod_total = {
@@ -201,3 +203,4 @@ int myprogram(struct xdp_md *ctx) {
 // License can be GPL and/or BSD.
 // But only necessary when you actually use GPL helpers, verifier will tell you.
 char _license[] SEC("license") = "GPL";
+
