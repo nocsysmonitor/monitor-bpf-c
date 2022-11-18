@@ -14,7 +14,6 @@
 #include <arpa/inet.h>
 
 #include <argp.h>
-#include <libgen.h>
 
 #include "xdp_util.h"
 #include "xdp_cut_pkt_def.h"
@@ -46,8 +45,7 @@ static arguments_t loader_arguments = {
     .sip_num  = 0,
 };
 
-static struct argp_option loader_options[] =
-{
+static struct argp_option loader_options[] = {
     { "debuglvl",  'd', "DEBUGLVL",    0, dbglvl_help, 0 },
     { "inf",       'i', "interface",   0, inf_help,    0 },
     { "sip",       's', "ip4 address", 0, sip_help,    0 },

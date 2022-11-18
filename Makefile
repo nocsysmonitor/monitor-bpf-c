@@ -2,13 +2,14 @@
 # Makefile for building eBPF programs
 #
 
-TARGETS := xdp_cut_pkt
+TARGETS := xdp_cut_pkt xdp_dedup
 TARGETS += xdp_tail
 
 
-LIBBPF_SRC=/home/vagrant/libbpf-0.4.0/src
-OUTPUT_DIR=${PWD}/build
-SRC_DIR=${PWD}/src
+LIBBPF_SRC= /home/vagrant/libbpf-0.4.0/src
+OUTPUT_DIR= ${PWD}/build
+SRC_DIR   = ${PWD}/src
+#KERNELDIR = /usr/src/linux-headers-$(shell uname -r)/include
 
 # Files under src/ have a name-scheme:
 # ---------------------------------------------------
@@ -40,7 +41,7 @@ EXTRA_CFLAGS=-Werror
 
 # Objects that xxx_user program is linked with:
 OBJECTS_UTIL = xdp_util.o
-OBJECTS_USER = $(patsubst %.o, $(OUTPUT_DIR)/%.o, $(OBJECTS_UTIL))
+OBJECTS_USER = $(patsubst %.o, $(OUTPUT_DIR)/lib/%.o, $(OBJECTS_UTIL))
 
 #
 # The static libbpf library
@@ -60,7 +61,8 @@ all: $(TARGETS_ALL) $(KERN_OBJECTS)
 .PHONY: clean 
 
 clean:
-	rm -f ${OUTPUT_DIR}/*
+	find ${OUTPUT_DIR} ! -name '.gitignore' -type f -exec rm {} \;
+#	rm -f ${OUTPUT_DIR}/*
 
 # Compiling of eBPF restricted-C code with LLVM
 #
@@ -69,7 +71,7 @@ $(KERN_OBJECTS): %.o:
 
 # util functions for xxx_user program
 $(OBJECTS_UTIL): %.o:
-	$(CLANG) $(CLFLAGS) -c $(SRC_DIR)/${@:.o=.c} -o ${OUTPUT_DIR}/$@
+	$(CLANG) $(CLFLAGS) -c $(SRC_DIR)/${@:.o=.c} -o ${OUTPUT_DIR}/lib/$@
 
 $(TARGETS): %: $(OBJECTS_UTIL)
 	$(CLANG) $(CLFLAGS) $(LDFLAGS) $(SRC_DIR)/$@_user.c \
