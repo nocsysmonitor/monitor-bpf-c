@@ -15,6 +15,8 @@
 #include <bpf/bpf.h>
 #include <bpf/libbpf.h>
 
+#include "xdp_util.h"
+
 static int ifindex = -1;
 static char ifname_buf[IF_NAMESIZE];
 static char *ifname = NULL;
@@ -26,22 +28,6 @@ static bool debug = false;
 #define EXIT_FAIL_OPTION        2
 #define EXIT_FAIL_XDP           3
 #define EXIT_FAIL_MAP		    20
-
-
-static char *get_prog_path(char *buffer_p, int buf_size, char *filename_p) {
-    char buf[1024] = {0};
-
-    /* Note we use sizeof(buf)-1 since we may need an extra char for NUL. */
-    if (readlink("/proc/self/exe", buf, sizeof(buf)-1) < 0) {
-        /* There was an error...  Perhaps the path does not exist
-         * or the buffer is not big enough.  errno has the details. */
-        perror("readlink");
-        return NULL;
-    }
-
-    snprintf(buffer_p, buf_size, "%s/%s", dirname(buf), filename_p);
-    return buffer_p;
-}
 
 static volatile sig_atomic_t keep_running = 1;
 
@@ -216,95 +202,4 @@ int main(int argc, char **argv)
 
     printf("Done\n");
     return 0;
-
-#if 0
-	if (load_bpf_file(filename)) {
-		fprintf(stderr, "ERR in load_bpf_file(): %s", bpf_log_buf);
-		return EXIT_FAIL;
-	}
-	if (!prog_fd[0]) {
-		fprintf(stderr, "ERR: load_bpf_file: %s\n", strerror(errno));
-		return EXIT_FAIL;
-	}
-
-	printf("INFO: bpf ELF file(%s) contained %d program(s)\n",
-	       filename, prog_cnt);
-
-	if (debug) {
-		extern int prog_array_fd;
-
-		printf("DEBUG: prog_array_fd:%d\n", prog_array_fd);
-	}
-
-	/* For XDP bpf_load.c seems not to implement automatic
-	 * populating the prog_array.
-	 *
-	 * Do this manually.  The prog_array_fd does contain the FD
-	 * but it is not default exported.  Thus, instead rely on the
-	 * order of SEC map and prog definitions.
-	 */
-	if (1) {
-		jmp_table_add_prog(jmp_table1, 1, prog_xdp_1);
-		jmp_table_add_prog(jmp_table1, 5, prog_xdp_5);
-	}
-	/* Notice populating jmp_table is done _before_ attaching the
-	 * main XDP program to a specific device.
-	 *
-	 * DEVEL: As I'm working on locking down prog_array features
-	 * changes after a XDP program have been associated with a
-	 * device.
-	 */
-	if (1) { /* Notice jmp_table2 (number 2) */
-		for (i = 40; i < 50; i++)
-			jmp_table_add_prog(jmp_table2, i, prog_xdp_unrelated);
-	}
-
-	if (debug) {
-		printf("map_fd[] jmp_table file descriptor mapping:\n");
-		for (i = 0; i < 3; i++)
-			printf(" jmp_table map_fd[%d]=fd:%d\n", i, map_fd[i]);
-	}
-
-	/* Attach XDP program */
-	if (set_link_xdp_fd(ifindex, prog_fd[0], xdp_flags) < 0) {
-		fprintf(stderr, "ERR: link set xdp fd failed\n");
-		return EXIT_FAIL_XDP;
-	}
-
-	/* Remove XDP program when program is interrupted or killed */
-	signal(SIGINT,  int_exit);
-	signal(SIGTERM, int_exit);
-
-	/* Notice, after XDP prog have been attached, the features
-	 * have been "locked down" (in RFC patch).  Adding something
-	 * to a jmp_table will result in runtime validation.
-	 */
-
-	if (1) {
-		/* Populate jmp_table3 with some prog */
-		for (i = 30; i < 32; i++) {
-			jmp_table_add_prog(jmp_table3, i, prog_xdp_unrelated);
-		}
-	}
-
-	if (1) {
-		/* Take over jmp entry 5 */
-		if (debug) {
-			int delay = 2;
-			printf("Delay: %d sec, before taking over idx 5\n",
-			       delay);
-			sleep(delay);
-		}
-		jmp_table_add_prog(jmp_table1, 5, prog_xdp_unrelated);
-	}
-
-	if (debug) {
-		printf("Debug-mode reading trace pipe (fix #define DEBUG)\n");
-		read_trace_pipe();
-	}
-
-	printf("Goodbye\n");
-	int_exit(SIGSTOP);
-#endif
-
 }

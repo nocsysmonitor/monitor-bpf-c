@@ -15,6 +15,8 @@
 
 #include <argp.h>
 #include <libgen.h>
+
+#include "xdp_util.h"
 #include "xdp_cut_pkt_def.h"
 
 /* MACRO FUNCTION DECLARATIONS
@@ -103,28 +105,12 @@ loader_parse_opt(int key, char *arg, struct argp_state *state)
     return 0;
 }
 
-static char *get_prog_path(char *buffer_p, int size) {
-    char buf[1024] = {0};
-
-    /* Note we use sizeof(buf)-1 since we may need an extra char for NUL. */
-    if (readlink("/proc/self/exe", buf, sizeof(buf)-1) < 0) {
-        /* There was an error...  Perhaps the path does not exist
-         * or the buffer is not big enough.  errno has the details. */
-        perror("readlink");
-        return NULL;
-    }
-
-    snprintf(buffer_p, size, "%s/%s", dirname(buf), KERN_PROG_NAME);
-    return buffer_p;
-}
-
 static volatile sig_atomic_t keep_running = 1;
 
 static void sig_handler(int _) {
     (void)_;
     keep_running = 0;
 }
-
 
 void add_filter_host(int mapFd, uint32_t *sip) {
     int one = 1;
@@ -157,14 +143,12 @@ static int xdp_link_detach(int ifindex, __u32 xdp_flags) {
 
 
 int main(int argc, char **argv) {
-    char filename[256]; // = "./prog_cut_pkt.o";
-    //#char *sip_array[] = {"192.168.200.14", "192.168.200.15", "7.5.5.6"};
-
+    char filename[256];
+    char filepath[256];
     struct rlimit r = {RLIM_INFINITY, RLIM_INFINITY};
     int progFd, en_sip_filter_map_fd, sip_filter_map_fd, mod_total_map_fd, err;
     int index = 0;
     struct bpf_object *obj;
-    struct bpf_map *map;
     uint64_t value;
     struct in_addr netAddr;
 
@@ -182,9 +166,10 @@ int main(int argc, char **argv) {
         return -1;
     }
 
-    if (NULL == get_prog_path(filename, sizeof(filename))) {
+    snprintf(filename, sizeof(filename), "%s_kern.o", argv[0]);
+    if (NULL == get_prog_path(filepath, sizeof(filepath), filename)) {
         fprintf(stderr, "ERR: failed to get path of BPF-OBJ file(%s)\n",
-            KERN_PROG_NAME);
+            filename);
         return -1;
     }
 

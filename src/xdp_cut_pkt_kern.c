@@ -105,13 +105,11 @@ int myprogram(struct xdp_md *ctx) {
 
 	void* data_end = (void*)(long)ctx->data_end;
 	void* data = (void*)(long)ctx->data;
-	void* payload;
 	struct ethhdr *eth = data;
 	struct iphdr *ip;
 
 	// drop packets
 	int rc = XDP_PASS; /*RETURNCODE;*/ // let pass XDP_PASS or redirect to tx via XDP_TX
-	long *value;
 	uint16_t h_proto;
 	uint64_t nh_off = 0;
 	uint32_t index;
