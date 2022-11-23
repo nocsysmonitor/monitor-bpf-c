@@ -6,19 +6,7 @@
 #include "xdp_dedup_def.h"
 #include "xdp_util.h"
 
-#define CTXTYPE     xdp_md
-#define DBGLR       "\n"
-#define HT_MAX      1024
-
 char _license[] SEC("license") = "GPL";
-
-enum cb_idx {
-    CB_P0,
-    CB_P1,
-    CB_FIN = 7,
-    CB_MATCH,
-    CB_MAX,
-};
 
 MAPS(TBL_NAME_CB) = {
     .type = BPF_MAP_TYPE_PROG_ARRAY,
@@ -47,9 +35,6 @@ MAPS(TBL_NAME_DROP) = {
     .value_size = sizeof(uint64_t),
     .max_entries = 1,
 };
-
-#define LOOP_MAX_ONE_ROUND      20
-#define DFLT_HASH_LEN           0xfff
 
 /* max packet len = 240 * 7 + 12 (done in CB_FIN) */
 const int LOOP_MAX_LEN = CB_FIN * LOOP_MAX_ONE_ROUND * 12;

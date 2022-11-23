@@ -89,13 +89,6 @@ static inline void update_mod_c (void) {
 	}
 }
 
-// This struct shall be in 'linux/if_vlan.h', but can't find.
-// Maybe kennel version problem.
-struct vlan_hdr {
-	__be16	h_vlan_TCI;
-	__be16	h_vlan_encapsulated_proto;
-};
-
 // Content of SEC() can be anything, it is userspace program decides where to hook this BPF program.
 // If multiple BPF programs locate in same file, use different content to identify.
 SEC("xdp")

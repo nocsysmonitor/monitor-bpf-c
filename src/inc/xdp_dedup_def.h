@@ -20,5 +20,20 @@ enum op_idx {
     OP_MAX,
 };
 
+enum cb_idx {
+    CB_P0,
+    CB_P1,
+    CB_FIN = 7,
+    CB_MATCH,
+    CB_MAX,
+};
+
+#define CTXTYPE     xdp_md
+#define DBGLR       "\n"
+#define HT_MAX      1024
+
+#define LOOP_MAX_ONE_ROUND      20
+#define DFLT_HASH_LEN           0xfff
+
 #endif
 

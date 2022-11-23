@@ -16,7 +16,7 @@
 #include <argp.h>
 
 #include "xdp_util.h"
-#include "xdp_dedup_def.h"
+#include "xdp_rem_tnlhdr_def.h"
 
 /* MACRO FUNCTION DECLARATIONS
  */
@@ -48,16 +48,22 @@ static struct argp_option user_options[] = {
     { "inf",     'i', "interface", 0, inf_help,    0 },
     { 0 }                                                                                           };
 
+#define _cb_ar_one(name) \
+    { xstr(CB_NAME_##name), CB_##name }
+
 static prog_ele_t cb_prog_ar [] = {
-    { xstr(CB_NAME_P0),    0 },
-    { xstr(CB_NAME_P1),    1 },
-    { xstr(CB_NAME_P1),    2 },
-    { xstr(CB_NAME_P1),    3 },
-    { xstr(CB_NAME_P1),    4 },
-    { xstr(CB_NAME_P1),    5 },
-    { xstr(CB_NAME_P1),    6 },
-    { xstr(CB_NAME_FIN),   7 },
-    { xstr(CB_NAME_MATCH), 8 },
+    _cb_ar_one(ETH),
+    _cb_ar_one(VLAN),
+    _cb_ar_one(IP4),
+    _cb_ar_one(IP6),
+    _cb_ar_one(TCP),
+    _cb_ar_one(UDP),
+    _cb_ar_one(GRE),
+    _cb_ar_one(VXLAN),
+    _cb_ar_one(GTP),
+    _cb_ar_one(GENEVE),
+    _cb_ar_one(CUT_1),
+    _cb_ar_one(CUT_2),
 };
 
 static volatile sig_atomic_t keep_running = 1;
@@ -115,50 +121,58 @@ user_parse_opt(int key, char *arg, struct argp_state *state)
     return 0;
 }
 
-static void enable_dbg_msg (struct bpf_object *obj) {
-    int tbl_fd, ret;
-
-    tbl_fd = bpf_object__find_map_fd_by_name(obj, xstr(TBL_NAME_OPT));
+static void enable_opt(struct bpf_object *obj, uint32_t op_idx) {
+    static char *name_ar [] = {
+        [OP_DBG]    = "DBG",
+        [OP_VXLAN]  = "VXLAN",
+        [OP_GTP]    = "GTP",
+        [OP_GRE]    = "GRE",
+        [OP_GENEVE] = "GENEVE",                                                                         };
+    int tbl_fd, ret;                                                                                                                                                                                        tbl_fd = bpf_object__find_map_fd_by_name(obj, xstr(TBL_NAME_OPT));
     if (tbl_fd < 0) {
         fprintf(stderr, "ERROR: finding %s in obj file failed\n", xstr(TBL_NAME_OPT));
         return;
     }
 
-    ret = bpf_map_update_elem(tbl_fd, (uint32_t []) {OP_DBG}, (uint32_t []) {1}, BPF_ANY);
+    ret = bpf_map_update_elem(tbl_fd, &op_idx, (uint32_t []) {1}, BPF_ANY);
     if (ret < 0) {
-        fprintf(stderr, "ERROR: enable dbg message failed\n");
+        fprintf(stderr, "ERROR: enable option (%d/%s) failed\n", op_idx, name_ar[op_idx]);
     }
 }
 
-static void clear_hash_elements(int map_fd, uint32_t cnt) {
-    uint32_t *cur_key = NULL;
-    uint32_t next_key;
+static void dump_cnt_tbl(int map_fd, uint32_t cnt) {
+    static char *name_ar [] = {
+        [CNT_VXLAN]  = "VXLAN",
+        [CNT_GTP]    = "GTP",
+        [CNT_GRE]    = "GRE",
+        [CNT_GENEVE] = "GENEVE",
+    };
+
+    uint32_t idx;
     uint32_t value;
     int err;
 
-    for (;;) {
-        err = bpf_map_get_next_key(map_fd, cur_key, &next_key);
+    if (cnt % 10 != 0)
+        return;
+
+    for (idx =0; idx < CNT_MAX; idx++) {
+
+        err = bpf_map_lookup_elem(map_fd, &idx, &value);
         if (err) {
-            if ((NULL == cur_key) && (cnt % 10 == 0))
-                printf("no hash key exists...\n");
-            break;
+            fprintf(stderr, "get cnt failed (%d)...\n", idx);
+            continue;
         }
 
-        bpf_map_lookup_elem(map_fd, &next_key, &value);
-        bpf_map_update_elem(map_fd, &next_key, (uint32_t []) {0}, BPF_ANY);
-
-        if (cnt % 10 == 0)
-            printf("reset key/value - %08x/%08x\n", next_key, value);
-
-        cur_key = &next_key;
+        printf("idx/name/value - %04x/%6s/%08x\n", idx, name_ar[idx], value);
     }
+    printf("\n");
 }
 
 int main(int argc, char **argv) {
 	char filename[256];
     char filepath[256];
 
-    int main_fd, err, fd, cb_tbl_fd, hash_tbl_fd;
+    int main_fd, err, fd, cb_tbl_fd, cnt_tbl_fd;
     struct bpf_program *prog;
     struct bpf_object *obj;
 
@@ -193,16 +207,21 @@ int main(int argc, char **argv) {
         return -1;
     }
 
-    hash_tbl_fd = bpf_object__find_map_fd_by_name(obj, xstr(TBL_NAME_HASH));
-    if (hash_tbl_fd < 0) {
-        fprintf(stderr, "ERROR: finding %s in obj file failed\n", xstr(TBL_NAME_HASH));
+    cnt_tbl_fd = bpf_object__find_map_fd_by_name(obj, xstr(TBL_NAME_CNT));
+    if (cnt_tbl_fd < 0) {
+        fprintf(stderr, "ERROR: finding %s in obj file failed\n", xstr(TBL_NAME_CNT));
         return -1;
     }
 
-
     if (user_arguments.dbg_lvl > 0) {
-       enable_dbg_msg(obj);
+        enable_opt(obj, OP_DBG);
     }
+
+    // defable enable VXLAN/GRE/GTP/GENEVE
+    enable_opt(obj, OP_VXLAN);
+    enable_opt(obj, OP_GTP);
+    enable_opt(obj, OP_GRE);
+    enable_opt(obj, OP_GENEVE);
 
     /* install program to cb_table */
     for (int idx = 0; idx < sizeof(cb_prog_ar) / sizeof(cb_prog_ar[0]); idx++) {
@@ -236,11 +255,9 @@ int main(int argc, char **argv) {
     while(keep_running) {
         static uint32_t cnt = 1;
 
-        cnt = (user_arguments.dbg_lvl > 0) ? cnt+1 : cnt;
+        dump_cnt_tbl(cnt_tbl_fd, cnt ++);
 
-        // reset hash table in 500 ms (default)
-        clear_hash_elements(hash_tbl_fd, cnt);
-        usleep(SLEEP_TIME_IN_US);
+        usleep(1000000); // 1 sec
     }
     printf("Stopped, start to unload BPF\n");
 

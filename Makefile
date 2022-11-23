@@ -2,8 +2,7 @@
 # Makefile for building eBPF programs
 #
 
-TARGETS := xdp_cut_pkt xdp_dedup
-TARGETS += xdp_tail
+TARGETS := xdp_cut_pkt xdp_dedup xdp_rem_tnlhdr
 
 
 LIBBPF_SRC= /home/vagrant/libbpf-0.4.0/src
@@ -34,10 +33,17 @@ CLFLAGS := -g -O2 -Wall
 CLFLAGS += -I${SRC_DIR}/inc
 CLFLAGS += -I${LIBBPF_SRC}/build/usr/include/
 CLFLAGS += -I${LIBBPF_SRC}
+CLFLAGS += -I/usr/include/
+
+# Use DBG=1 to generate intermediate files
+CL_DBG_FLAGS := $(if $(DBG), -v --save-temps, )
 
 LDFLAGS = -lelf
 
 EXTRA_CFLAGS=-Werror
+
+# Local copy of header files took from linux kernel
+LINUXINCLUDE := -I${SRC_DIR}/inc/kernel
 
 # Objects that xxx_user program is linked with:
 OBJECTS_UTIL = xdp_util.o
@@ -58,16 +64,18 @@ CC = gcc
 
 all: $(TARGETS_ALL) $(KERN_OBJECTS)
 
-.PHONY: clean 
+.PHONY: clean clean-dbg
 
-clean:
+clean: clean-dbg
 	find ${OUTPUT_DIR} ! -name '.gitignore' -type f -exec rm {} \;
-#	rm -f ${OUTPUT_DIR}/*
+
+clean-dbg:
+	find . -type f \( -name \*.bc -o -name \*.i -o -name \*.s \) -delete
 
 # Compiling of eBPF restricted-C code with LLVM
 #
 $(KERN_OBJECTS): %.o:
-	$(CLANG) $(CLFLAGS) -target bpf -c $(SRC_DIR)/${@:.o=.c} -o ${OUTPUT_DIR}/$@
+	$(CLANG) $(CL_DBG_FLAGS) $(CLFLAGS) $(LINUXINCLUDE) -target bpf -c $(SRC_DIR)/${@:.o=.c} -o ${OUTPUT_DIR}/$@
 
 # util functions for xxx_user program
 $(OBJECTS_UTIL): %.o:
