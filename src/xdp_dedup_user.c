@@ -3,6 +3,7 @@
 #include <net/if.h>
 #include <unistd.h>
 #include <stdbool.h>
+#include <libgen.h>
 #include <linux/if_link.h>
 
 #include <stdio.h>
@@ -44,9 +45,12 @@ static arguments_t user_arguments = {
 };
 
 static struct argp_option user_options[] = {
+    { 0,0,0,0, "Optional:", 7 },
     { "dbg_lvl", 'd', "level",     0, dbglvl_help, 0 },
+    { 0,0,0,0, "Required for loading xdp kernel program:", 5 },
     { "inf",     'i', "interface", 0, inf_help,    0 },
-    { 0 }                                                                                           };
+    { 0}
+};
 
 static prog_ele_t cb_prog_ar [] = {
     { xstr(CB_NAME_P0),    0 },
@@ -97,7 +101,9 @@ user_parse_opt(int key, char *arg, struct argp_state *state)
 
     case ARGP_KEY_ARG:
         /* Too many arguments. */
-        if (state->arg_num >= 2)
+        // for arguments, not for options above.
+        // we do not accept any arguments
+        if (state->arg_num >= 0)
             argp_usage (state);
 
         break;
@@ -120,13 +126,13 @@ static void enable_dbg_msg (struct bpf_object *obj) {
 
     tbl_fd = bpf_object__find_map_fd_by_name(obj, xstr(TBL_NAME_OPT));
     if (tbl_fd < 0) {
-        fprintf(stderr, "ERROR: finding %s in obj file failed\n", xstr(TBL_NAME_OPT));
+        fprintf(stderr, "ERR: finding %s in obj file failed\n", xstr(TBL_NAME_OPT));
         return;
     }
 
     ret = bpf_map_update_elem(tbl_fd, (uint32_t []) {OP_DBG}, (uint32_t []) {1}, BPF_ANY);
     if (ret < 0) {
-        fprintf(stderr, "ERROR: enable dbg message failed\n");
+        fprintf(stderr, "ERR: enable dbg message failed\n");
     }
 }
 
@@ -155,47 +161,55 @@ static void clear_hash_elements(int map_fd, uint32_t cnt) {
 }
 
 int main(int argc, char **argv) {
-	char filename[256];
-    char filepath[256];
-
+    char *prog_name_p;
+    char kern_prog_name[256]; //basename, ex: xxx
+    char kern_prog_path[256]; //including path, ex yyy/yyy/xxx
     int main_fd, err, fd, cb_tbl_fd, hash_tbl_fd;
     struct bpf_program *prog;
     struct bpf_object *obj;
 
     /* Our argp parser. */
     static struct argp argp = { user_options, user_parse_opt, NULL, NULL };
-                                                                                                        /* Parse our arguments; every option seen by `parse_opt' will be
-     * reflected in arguments.
-     */                                                                                                 argp_parse(&argp, argc, argv, 0, 0, &user_arguments);
 
-	snprintf(filename, sizeof(filename), "%s_kern.o", argv[0]);
-    if (NULL == get_prog_path(filepath, sizeof(filepath), filename)) {
-        fprintf(stderr, "ERR: failed to get path of BPF-OBJ file(%s)\n",
-            filename);
+    /* Parse our arguments; every option seen by `parse_opt' will be
+     * reflected in arguments.
+     */
+    argp_parse(&argp, argc, argv, 0, 0, &user_arguments);
+
+    prog_name_p = basename(argv[0]);
+    if (NULL == prog_name_p) {
+        fprintf(stderr, "ERR: failed to get program name(%s)\n", argv[0]);
         return -1;
     }
 
-    obj = bpf_object__open_file(filename, NULL);
+    snprintf(kern_prog_name, sizeof(kern_prog_name), "%s_kern.o", prog_name_p);
+    if (NULL == get_kern_prog_path(kern_prog_path, sizeof(kern_prog_path), kern_prog_name)) {
+        fprintf(stderr, "ERR: failed to get path of BPF-OBJ file(%s)\n",
+            kern_prog_name);
+        return -1;
+    }
+
+    obj = bpf_object__open_file(kern_prog_path, NULL);
     if (libbpf_get_error(obj)) {
-        fprintf(stderr, "ERROR: opening BPF object file failed\n");
+        fprintf(stderr, "ERR: opening BPF object file failed\n");
         return 0;
     }
 
     /* load BPF program */
     if (bpf_object__load(obj)) {
-        fprintf(stderr, "ERROR: loading BPF object file failed\n");
+        fprintf(stderr, "ERR: loading BPF object file failed\n");
         return -1;
     }
 
     cb_tbl_fd = bpf_object__find_map_fd_by_name(obj, xstr(TBL_NAME_CB));
     if (cb_tbl_fd < 0) {
-        fprintf(stderr, "ERROR: finding %s in obj file failed\n", xstr(TBL_NAME_CB));
+        fprintf(stderr, "ERR: finding %s in obj file failed\n", xstr(TBL_NAME_CB));
         return -1;
     }
 
     hash_tbl_fd = bpf_object__find_map_fd_by_name(obj, xstr(TBL_NAME_HASH));
     if (hash_tbl_fd < 0) {
-        fprintf(stderr, "ERROR: finding %s in obj file failed\n", xstr(TBL_NAME_HASH));
+        fprintf(stderr, "ERR: finding %s in obj file failed\n", xstr(TBL_NAME_HASH));
         return -1;
     }
 
@@ -254,3 +268,4 @@ int main(int argc, char **argv) {
     printf("Done\n");
     return 0;
 }
+

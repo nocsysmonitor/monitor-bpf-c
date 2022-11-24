@@ -1,6 +1,10 @@
 #ifndef _XDP_UTIL_H_
 #define _XDP_UTIL_H_
 
+#define PIN_PATH_MAX    256
+#define PIN_BASE_PATH   "/sys/fs/bpf"
+
+
 /* MACRO DECLARATIONS
  */
 #define xstr(s) str(s)
@@ -21,7 +25,15 @@
 
 /* FUNCTION DECLARATIONS
  */
-char *get_prog_path(char *buffer_p, int buf_size, char *filename_p);
+char *get_kern_prog_path(char *buffer_p, int buf_size, char *filename_p);
+
+int check_map_fd_info(
+    const struct bpf_map_info *info,
+    const struct bpf_map_info *exp);
+
+int open_bpf_map_file(
+    char *file_path_p,
+    struct bpf_map_info *info);
 
 #endif
 

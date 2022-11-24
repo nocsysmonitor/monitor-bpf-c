@@ -1,12 +1,10 @@
-#include <bpf/bpf.h>
-#include <bpf/libbpf.h>
-
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <errno.h>
 #include <signal.h>
 #include <unistd.h>
+#include <libgen.h>
 #include <sys/resource.h>
 #include <assert.h>
 #include <net/if.h>
@@ -15,6 +13,8 @@
 
 #include <argp.h>
 
+#include <bpf/bpf.h>
+#include <bpf/libbpf.h>
 #include "xdp_util.h"
 #include "xdp_cut_pkt_def.h"
 
@@ -49,7 +49,8 @@ static struct argp_option loader_options[] = {
     { "debuglvl",  'd', "DEBUGLVL",    0, dbglvl_help, 0 },
     { "inf",       'i', "interface",   0, inf_help,    0 },
     { "sip",       's', "ip4 address", 0, sip_help,    0 },
-    { 0 }                                                                                           };
+    { 0}
+};
 
 /* Parse a single option. */
 static error_t
@@ -141,8 +142,9 @@ static int xdp_link_detach(int ifindex, __u32 xdp_flags) {
 
 
 int main(int argc, char **argv) {
-    char filename[256];
-    char filepath[256];
+    char *prog_name_p;
+    char kern_prog_name[256]; //basename, ex: xxx
+    char kern_prog_path[256]; //including path, ex yyy/yyy/xxx
     struct rlimit r = {RLIM_INFINITY, RLIM_INFINITY};
     int progFd, en_sip_filter_map_fd, sip_filter_map_fd, mod_total_map_fd, err;
     int index = 0;
@@ -164,18 +166,24 @@ int main(int argc, char **argv) {
         return -1;
     }
 
-    snprintf(filename, sizeof(filename), "%s_kern.o", argv[0]);
-    if (NULL == get_prog_path(filepath, sizeof(filepath), filename)) {
+    prog_name_p = basename(argv[0]);
+    if (NULL == prog_name_p) {
+        fprintf(stderr, "ERR: failed to get program name(%s)\n", argv[0]);
+        return -1;
+    }
+
+    snprintf(kern_prog_name, sizeof(kern_prog_name), "%s_kern.o", prog_name_p);
+    if (NULL == get_kern_prog_path(kern_prog_path, sizeof(kern_prog_path), kern_prog_name)) {
         fprintf(stderr, "ERR: failed to get path of BPF-OBJ file(%s)\n",
-            filename);
+            kern_prog_name);
         return -1;
     }
 
     /* Load the BPF-ELF object file and get back first BPF_prog FD because we only had one */
-    err = bpf_prog_load(filename, BPF_PROG_TYPE_XDP, &obj, &progFd);
+    err = bpf_prog_load(kern_prog_path, BPF_PROG_TYPE_XDP, &obj, &progFd);
     if (err) {
         fprintf(stderr, "ERR: loading BPF-OBJ file(%s) (%d): %s\n",
-            filename, err, strerror(-err));
+            kern_prog_path, err, strerror(-err));
         return err;
     }
     printf("Program loaded with id: %d\n", progFd);
@@ -230,4 +238,3 @@ int main(int argc, char **argv) {
     printf("Done\n");
     return 0;
 }
-
