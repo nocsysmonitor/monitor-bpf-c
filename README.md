@@ -14,7 +14,7 @@ vagrant up vm1
 ## 2. download the source code inside the vm1
 ```
 cd acc-bpf2
-./build_deb.sh
+make build-deb
 ```
 
 ## 3. install the deb generated in the above step.
@@ -25,7 +25,11 @@ dpkg -i xxx.deb
 
 | Command     | Brief Description | Ex:
 |:---         |:---         |:---
-| xdp_cut_pkt | Truncate packets | xdp_cut_pkt -s 192.168.1.1 -i eth0 |
+| xdp_cut_pkt | Truncate packets | xdp_cut_pkt -e 192.168.1.1 -i eth0 |
+| xdp_dedup | Discard duplicate packets | xdp_dedup -i eth0 |
+| xdp_rem_tnlhdr| Remove GTPv1-U/Vxlan/GRE/GENEVE header | xdp_rem_tnlhdr -i eth0 |
 
-<!--- | xdp_deDup.py | Discard duplicate Packets | xdp_deDup.py eth0 |
-| xdp_remTnlhdr.py | Remove GTPv1-U/Vxlan/GRE header | xdp_remTnlhdr.py eth0 | --->
+NOTE:
+1. Use {command} --help for more information.
+
+2. Use kill -TERM {pid} to stop the process, then the BPF program can be unloaded correclty. Otherwise, it may need to use "bpftool net detach xdp dev {dev}" to unload BPF program manually.

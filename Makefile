@@ -64,9 +64,9 @@ CC = gcc
 
 all: $(TARGETS_ALL) $(KERN_OBJECTS)
 
-.PHONY: clean clean-tmp
+.PHONY: clean clean-tmp clean-deb
 
-clean: clean-tmp
+clean: clean-tmp clean-deb
 	find ${OUTPUT_DIR} ! -name '.gitignore' -type f -exec rm {} \;
 
 clean-tmp:
@@ -87,3 +87,38 @@ $(TARGETS): %: $(OBJECTS_UTIL)
 
 .DEFAULT_GOAL := all
 
+
+#
+# for building a simple debian package
+#
+
+GIT_COMMIT=$(shell git describe --dirty --always)
+
+define DEB_control
+Package: acc-bpf
+Version: 1.0~$(GIT_COMMIT)
+Architecture: amd64
+Description: Accton BPF tools (C/#$(GIT_COMMIT))
+Maintainer:
+
+endef
+
+DEB_PATH=$(PWD)/debian
+
+export DEB_control
+
+print-control:
+	mkdir -p $(DEB_PATH)/DEBIAN
+	@echo "$$DEB_control" > $(DEB_PATH)/DEBIAN/control
+
+cp-bin:
+	mkdir -p $(DEB_PATH)/usr/local/bin
+	cp $(OUTPUT_DIR)/* $(DEB_PATH)/usr/local/bin/ | true
+
+build-deb: all print-control cp-bin
+	dpkg -b $(DEB_PATH) acc-bpf.deb
+	dpkg -c acc-bpf.deb
+
+clean-deb:
+	rm acc-bpf.deb
+	rm -rf $(DEB_PATH)

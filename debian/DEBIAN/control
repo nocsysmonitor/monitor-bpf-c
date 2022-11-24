@@ -1,6 +1,0 @@
-Package: acc-bpf
-Version: 1.0~GIT_COMMIT
-Architecture: amd64
-Description: Accton BPF tools (C/#GIT_COMMIT)
-Maintainer: 
-

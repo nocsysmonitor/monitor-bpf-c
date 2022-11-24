@@ -369,21 +369,25 @@ PROG(CB_NAME_MATCH) (struct CTXTYPE *ctx)
     {
         *count += 1;
 
-        drop_c = bpf_map_lookup_elem(&TBL_NAME_DROP, (uint32_t []) {0});
-        if (drop_c)
+        if (*count > 1)
         {
-            *drop_c += 1;
-        }
-        else
-        {
-            bpf_map_update_elem(&TBL_NAME_DROP, (uint32_t []) {0}, (uint64_t []) {1}, BPF_NOEXIST);
-        }
+            drop_c = bpf_map_lookup_elem(&TBL_NAME_DROP, (uint32_t []) {0});
+            if (drop_c)
+            {
+                *drop_c += 1;
+            }
+            else
+            {
+                bpf_map_update_elem(
+                    &TBL_NAME_DROP, (uint32_t []) {0}, (uint64_t []) {1}, BPF_NOEXIST);
+            }
 
-        rc = XDP_DROP;
+            rc = XDP_DROP;
 
-        if (get_opt(OP_DBG) > 0)
-        {
-            bpf_debug("drop hash - %x" DBGLR, meta->c);
+            if (get_opt(OP_DBG) > 0)
+            {
+                bpf_debug("drop hash - %x" DBGLR, meta->c);
+            }
         }
     }
     else        // if the hash for the key doesn't exist, create one
