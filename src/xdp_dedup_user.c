@@ -16,13 +16,13 @@
 #include <bpf/libbpf.h>
 #include <argp.h>
 
-#include "xdp_util.h"
+#include "xdp_util_user.h"
 #include "xdp_dedup_def.h"
 
 /* MACRO FUNCTION DECLARATIONS
  */
 #define dbglvl_help     "The verbosity of debug messages (" xstr(0) \
-                          "~" xstr(3) ")."
+                          "~" xstr(1) ")."
 
 #define inf_help        "The name of interface to use."
 
@@ -151,10 +151,13 @@ static void clear_hash_elements(int map_fd, uint32_t cnt) {
         }
 
         bpf_map_lookup_elem(map_fd, &next_key, &value);
-        bpf_map_update_elem(map_fd, &next_key, (uint32_t []) {0}, BPF_ANY);
 
-        if (cnt % 10 == 0)
-            printf("reset key/value - %08x/%08x\n", next_key, value);
+        if (value != 0) {
+            bpf_map_update_elem(map_fd, &next_key, (uint32_t []) {0}, BPF_ANY);
+
+            if (cnt % 10 == 0)
+                printf("reset key/value - %08x/%08x\n", next_key, value);
+        }
 
         cur_key = &next_key;
     }

@@ -23,7 +23,7 @@
 #include <net/gtp.h>
 
 #include "xdp_rem_tnlhdr_def.h"
-#include "xdp_util.h"
+#include "xdp_util_kern.h"
 
 char _license[] SEC("license") = "GPL";
 

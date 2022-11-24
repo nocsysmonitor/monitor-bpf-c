@@ -15,13 +15,13 @@
 #include <bpf/bpf.h>
 #include <bpf/libbpf.h>
 
-#include "xdp_util.h"
+#include "xdp_util_user.h"
 #include "xdp_rem_tnlhdr_def.h"
 
 /* MACRO FUNCTION DECLARATIONS
  */
 #define dbglvl_help     "The verbosity of debug messages (" xstr(0) \
-                          "~" xstr(3) ")."
+                          "~" xstr(1) ")."
 
 #define inf_help        "The name of interface to use."
 #define en_help         "The idx of option to enable. (" xstr(0) "~" \
@@ -207,114 +207,6 @@ static void dump_cnt_tbl(int map_fd, uint32_t cnt) {
     printf("\n");
 }
 
-char *get_pin_path(char *sub_dir) {
-    static char pin_dir[PIN_PATH_MAX] = {0};
-    int len;
-
-    if (pin_dir[0] == '\0') {
-        len = snprintf(pin_dir, sizeof(pin_dir), "%s/%s", PIN_BASE_PATH, sub_dir);
-        if (len < 0) {
-            fprintf(stderr, "ERR: creating pin dirname\n");
-            return NULL;
-        }
-    }
-
-    return pin_dir;
-}
-
-char *get_map_path(char *sub_dir, char *map_name) {
-    static char map_path[PIN_PATH_MAX] = {0};
-    int len;
-
-    len = snprintf(map_path, sizeof(map_path), "%s/%s/%s",
-                PIN_BASE_PATH, sub_dir, map_name);
-    if (len < 0) {
-        fprintf(stderr, "ERR: creating map path failed (%s)\n", map_name);
-        return NULL;
-    }
-
-    return map_path;
-}
-
-/* Pinning maps under /sys/fs/bpf in subdir */
-int pin_maps_in_bpf_object(struct bpf_object *bpf_obj, char *subdir, int is_pin) {
-    char *map_path_p;
-    char *pin_dir_p;
-    int err;
-
-    pin_dir_p = get_pin_path(subdir);
-    if (NULL == pin_dir_p)
-        return -1;
-
-    if (is_pin != 0) {
-        map_path_p = get_map_path(subdir, xstr(TBL_NAME_OPT));
-        if (NULL == map_path_p)
-            return -1;
-
-
-        /* Existing/previous XDP prog might not have cleaned up */
-        if (access(map_path_p, F_OK ) != -1 ) {
-            printf(" - Unpinning (remove) prev maps in %s/\n", pin_dir_p);
-
-            /* Basically calls unlink(3) on map_filename */
-            err = bpf_object__unpin_maps(bpf_obj, pin_dir_p);
-            if (err) {
-                fprintf(stderr, "ERR: UNpinning maps in %s\n", pin_dir_p);
-                return -1;
-            }
-        }
-
-
-        printf(" - Pinning maps in %s/\n", pin_dir_p);
-
-        /* This will pin all maps in our bpf_object */
-        err = bpf_object__pin_maps(bpf_obj, pin_dir_p);
-        if (err) {
-            fprintf(stderr, "try to mount bpf fs first ! (mount -t bpf bpf /sys/fs/bpf/)\n");
-            return -1;
-        }
-    } else {
-        printf(" - Unpinning maps in %s/\n", pin_dir_p);
-
-        err = bpf_object__unpin_maps(bpf_obj, pin_dir_p);
-        if (err) {
-            fprintf(stderr, "ERR: UNpinning maps in %s\n", pin_dir_p);
-            return -1;
-        }
-    }
-
-    return 0;
-}
-
-int access_pinned_map (char *sub_dir_p, char *map_name_p) {
-
-    char *map_path_p;
-    int map_fd, err;
-    struct bpf_map_info map_expect = { 0 };
-    struct bpf_map_info info = { 0 };
-
-    map_path_p = get_map_path(sub_dir_p, map_name_p);
-    if (NULL == map_path_p)
-        return -1;
-
-    map_fd = open_bpf_map_file(map_path_p, &info);
-    if (map_fd < 0) {
-        return -1;
-    }
-
-    /* check map info, e.g. datarec is expected size */
-    map_expect.key_size    = sizeof(uint32_t);
-    map_expect.value_size  = sizeof(uint32_t);
-    map_expect.max_entries = OP_MAX;
-    err = check_map_fd_info(&info, &map_expect);
-    if (err) {
-        fprintf(stderr, "ERR: map via FD not compatible\n");
-        return -1;
-    }
-
-    return map_fd;
-}
-
 void update_options (int map_fd) {
     int idx, opt_idx;
 
@@ -342,7 +234,7 @@ void update_options (int map_fd) {
 
 int main(int argc, char **argv) {
     char *prog_name_p;
-        char kern_prog_name[256]; //basename, ex: xxx
+    char kern_prog_name[256]; //basename, ex: xxx
     char kern_prog_path[256]; //including path, ex yyy/yyy/xxx
     int main_fd, err, fd, cb_tbl_fd, cnt_tbl_fd, opt_tbl_fd;
     struct bpf_program *prog;
@@ -363,7 +255,7 @@ int main(int argc, char **argv) {
 
     // only access pin map to show info or en/dis-able options.
     if (user_arguments.if_idx == 0) {
-        opt_tbl_fd = access_pinned_map(prog_name_p, xstr(TBL_NAME_OPT));
+        opt_tbl_fd = access_pinned_map(prog_name_p, xstr(TBL_NAME_OPT), NULL);
         update_options(opt_tbl_fd);
         return 0;
     }
@@ -441,7 +333,7 @@ int main(int argc, char **argv) {
     printf("BPF attatched to interface: %d\n", user_arguments.if_idx);
 
     /* Use the command name as subdir for exporting/pinning maps */
-    err = pin_maps_in_bpf_object(obj, prog_name_p, 1);
+    err = pin_maps_in_bpf_object(obj, prog_name_p, NULL, 1);
     if (err) {
         fprintf(stderr, "ERR: pinning maps\n");
         return err;
@@ -460,7 +352,7 @@ int main(int argc, char **argv) {
     }
     printf("Stopped, start to unload BPF\n");
 
-    pin_maps_in_bpf_object(obj, prog_name_p, 0);
+    pin_maps_in_bpf_object(obj, prog_name_p, NULL, 0);
 
     /* Detach XDP from interface */
     if ((err = bpf_set_link_xdp_fd(user_arguments.if_idx, -1, XDP_FLAGS_UPDATE_IF_NOEXIST)) < 0) {

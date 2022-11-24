@@ -15,7 +15,8 @@
 
 #include <bpf/bpf.h>
 #include <bpf/libbpf.h>
-#include "xdp_util.h"
+
+#include "xdp_util_user.h"
 #include "xdp_cut_pkt_def.h"
 
 /* MACRO FUNCTION DECLARATIONS
@@ -23,38 +24,49 @@
 #define xstr(s) str(s)
 #define str(s)  #s
 #define dbglvl_help     "The verbosity of debug messages (" xstr(0) \
-                          "~" xstr(3) ")."
+                          "~" xstr(1) ")."
 
 #define inf_help        "The name of interface to use."
-#define sip_help        "The source ipv4 address to filter."
+#define en_sip_help     "Add source ipv4 address to filter list."
+#define dis_sip_help    "Remove source ipv4 address from filter list."
 
 /* DATA TYPE DECLARATIONS
  */
 typedef struct {
-    int     debuglvl;
+    char    *en_sip_p[MAX_NBR_SIP_TBL];
+    char    *dis_sip_p[MAX_NBR_SIP_TBL];
+
+    int     dbg_lvl;
     int     if_idx;
-    char    *sip[MAX_NBR_SIP_TBL];
-    int     sip_num;
+    int     en_sip_num;
+    int     dis_sip_num;
+    int     list_sip;
 } arguments_t;
 
 
 /* STATIC VARIABLE DEFINITIONS
  */
-static arguments_t loader_arguments = {
-    .debuglvl = 0,
-    .sip_num  = 0,
+static arguments_t user_arguments = {
+    .dbg_lvl     = 0,
+    .en_sip_num  = 0,
+    .dis_sip_num = 0,
+    .list_sip    = 0,
 };
 
-static struct argp_option loader_options[] = {
-    { "debuglvl",  'd', "DEBUGLVL",    0, dbglvl_help, 0 },
-    { "inf",       'i', "interface",   0, inf_help,    0 },
-    { "sip",       's', "ip4 address", 0, sip_help,    0 },
+static struct argp_option user_options[] = {
+    { 0,0,0,0, "Optional:",                                7 },
+    { "dbg_lvl",   'd', "level", 0, dbglvl_help,           0 },
+    { "sip",       'e', "ip4 address", 0, en_sip_help,     0 },
+    { "sip",       'u', "ip4 address", 0, dis_sip_help,    0 },
+    { 0,           'l', 0, 0, "List SIPs in filter table", 0 },
+    { 0,0,0,0, "Required for loading xdp kernel program:", 5 },
+    { "inf",       'i', "interface",   0, inf_help,        0 },
     { 0}
 };
 
 /* Parse a single option. */
 static error_t
-loader_parse_opt(int key, char *arg, struct argp_state *state)
+user_parse_opt(int key, char *arg, struct argp_state *state)
 {
     /* Get the input argument from argp_parse, which we
        know is a pointer to our arguments structure. */
@@ -65,15 +77,31 @@ loader_parse_opt(int key, char *arg, struct argp_state *state)
     case 'd':
         errno = 0;
 
-        arguments_p->debuglvl = strtoul(arg, NULL, 0);
+        arguments_p->dbg_lvl = strtoul(arg, NULL, 0);
         if (errno != 0) {
-            argp_error(state, "Invalid debuglvl \"%s\"", arg);
+            argp_error(state, "Invalid level \"%s\"", arg);
             return errno;
         }
         break;
 
-    case 's':
-        arguments_p->sip[arguments_p->sip_num++] = arg;
+    case 'e':
+        if (arguments_p->en_sip_num >= MAX_NBR_SIP_TBL) {
+            argp_error(state, "Too many SIPs to add \"%s\"", arg);
+            return -1;
+        }
+        arguments_p->en_sip_p[arguments_p->en_sip_num++] = arg;
+        break;
+
+    case 'u':
+        if (arguments_p->dis_sip_num >= MAX_NBR_SIP_TBL) {
+            argp_error(state, "Too many SIPs to remove \"%s\"", arg);
+            return -1;
+        }
+        arguments_p->dis_sip_p[arguments_p->dis_sip_num++] = arg;
+        break;
+
+    case 'l':
+        arguments_p->list_sip = 1;
         break;
 
     case 'i':
@@ -86,15 +114,22 @@ loader_parse_opt(int key, char *arg, struct argp_state *state)
 
     case ARGP_KEY_ARG:
         /* Too many arguments. */
-        if (state->arg_num >= 2)
+        // for arguments, not for options above.
+        // we do not accept any arguments
+        if (state->arg_num > 0)
             argp_usage (state);
 
         break;
 
     case ARGP_KEY_END:
         if (arguments_p->if_idx == 0) {
-            argp_failure(state, 1, 0, "interface is required. See --help for more information");
-            exit(ARGP_ERR_UNKNOWN);
+            if (arguments_p->en_sip_num == 0 &&
+                arguments_p->dis_sip_num == 0 &&
+                arguments_p->list_sip == 0) {
+
+                argp_failure(state, 1, 0, "interface is required. See --help for more information");
+                exit(ARGP_ERR_UNKNOWN);
+            }
         }
 
     default:
@@ -109,15 +144,6 @@ static volatile sig_atomic_t keep_running = 1;
 static void sig_handler(int _) {
     (void)_;
     keep_running = 0;
-}
-
-void add_filter_host(int mapFd, uint32_t *sip) {
-    int one = 1;
-    bpf_map_update_elem(mapFd, sip, &one, BPF_ANY);
-}
-
-void del_filter_host(int mapFd, uint32_t *sip) {
-    bpf_map_delete_elem(mapFd, sip);
 }
 
 static int get_map(struct bpf_object *obj, const char *filename) {
@@ -140,6 +166,61 @@ static int xdp_link_detach(int ifindex, __u32 xdp_flags) {
     return 0;
 }
 
+static void update_filter_sip(int map_fd) {
+    int     idx;
+    struct in_addr netAddr;
+
+    /* Add SIPs to filter map */
+    for (idx = 0; idx < user_arguments.en_sip_num; idx++) {
+        //inet_addr: network order
+        netAddr.s_addr = inet_addr(user_arguments.en_sip_p[idx]);
+        bpf_map_update_elem(map_fd, &netAddr.s_addr, (uint32_t []) {1}, BPF_ANY);
+    }
+
+    /* Remove SIPs from filter map */
+    for (idx = 0; idx < user_arguments.dis_sip_num; idx++) {
+        netAddr.s_addr = inet_addr(user_arguments.dis_sip_p[idx]);
+        bpf_map_delete_elem(map_fd, &netAddr.s_addr);
+    }
+}
+
+static void list_filter_sip(int map_fd) {
+    uint32_t *cur_key = NULL;
+    uint32_t next_key;
+    unsigned char *byte_p = (unsigned char *)&next_key;
+    int err;
+
+    printf("SIP Filter List:\n");
+    for (;;) {
+        err = bpf_map_get_next_key(map_fd, cur_key, &next_key);
+        if (err) {
+            break;
+        }
+
+        printf(" - %d.%d.%d.%d\n",
+            byte_p[0], byte_p[1], byte_p[2], byte_p[3]);
+
+        cur_key = &next_key;
+    }
+
+    if (NULL == cur_key) {
+        printf(" - Empty (sip filtering is disabled)\n");
+    }
+}
+
+static void update_en_sip_filter(int en_map_fd, int sip_map_fd) {
+    uint32_t *cur_key = NULL;
+    uint32_t next_key;
+    uint32_t value =1;
+    int err;
+
+    err = bpf_map_get_next_key(sip_map_fd, cur_key, &next_key);
+    if (err) {
+        value = 0;
+    }
+
+    bpf_map_update_elem(en_map_fd, (uint32_t []) {0}, &value, BPF_ANY);
+}
 
 int main(int argc, char **argv) {
     char *prog_name_p;
@@ -153,12 +234,12 @@ int main(int argc, char **argv) {
     struct in_addr netAddr;
 
     /* Our argp parser. */
-    static struct argp argp = { loader_options, loader_parse_opt, NULL, NULL };
+    static struct argp argp = { user_options, user_parse_opt, NULL, NULL };
 
     /* Parse our arguments; every option seen by `parse_opt' will be
      * reflected in arguments.
      */
-    argp_parse(&argp, argc, argv, 0, 0, &loader_arguments);
+    argp_parse(&argp, argc, argv, 0, 0, &user_arguments);
 
     /* Set resource limit for maps */
     if (setrlimit(RLIMIT_MEMLOCK, &r)) {
@@ -170,6 +251,21 @@ int main(int argc, char **argv) {
     if (NULL == prog_name_p) {
         fprintf(stderr, "ERR: failed to get program name(%s)\n", argv[0]);
         return -1;
+    }
+
+    // only access pinned map to add/remove sips
+    if (user_arguments.if_idx == 0) {
+        sip_filter_map_fd = access_pinned_map(prog_name_p, xstr(TBL_NAME_SIP), NULL);
+        update_filter_sip(sip_filter_map_fd);
+
+        en_sip_filter_map_fd = access_pinned_map(prog_name_p, xstr(TBL_NAME_EN_SIP), NULL);
+
+        update_en_sip_filter(en_sip_filter_map_fd, sip_filter_map_fd);
+
+        if (user_arguments.list_sip) {
+            list_filter_sip(sip_filter_map_fd);
+        }
+        return 0;
     }
 
     snprintf(kern_prog_name, sizeof(kern_prog_name), "%s_kern.o", prog_name_p);
@@ -189,38 +285,42 @@ int main(int argc, char **argv) {
     printf("Program loaded with id: %d\n", progFd);
 
     /* Get maps */
-    en_sip_filter_map_fd = get_map(obj, "en_sip_filter");
+    en_sip_filter_map_fd = get_map(obj, xstr(TBL_NAME_EN_SIP));
     if (en_sip_filter_map_fd < 0) {
-        fprintf(stderr, "ERR: get map of %s failed.\n", "en_sip_filter");
+        fprintf(stderr, "ERR: get map of %s failed.\n", xstr(TBL_NAME_EN_SIP));
         return en_sip_filter_map_fd;
     }
 
-    sip_filter_map_fd = get_map(obj, "sip_filter");
+    sip_filter_map_fd = get_map(obj, xstr(TBL_NAME_SIP));
     if (sip_filter_map_fd < 0) {
-        fprintf(stderr, "ERR: get map of %s failed.\n", "sip_filter");
+        fprintf(stderr, "ERR: get map of %s failed.\n", xstr(TBL_NAME_SIP));
         return sip_filter_map_fd;
     }
 
-    mod_total_map_fd = get_map(obj, "mod_total");
+    mod_total_map_fd = get_map(obj, xstr(TBL_NAME_CNT));
     if (mod_total_map_fd < 0) {
-        fprintf(stderr, "ERR: get map of %s failed.\n", "mod_total");
+        fprintf(stderr, "ERR: get map of %s failed.\n", xstr(TBL_NAME_CNT));
         return mod_total_map_fd;
     }
 
-    /* Add SIP to filter map */
-    for (int idx = 0; idx < loader_arguments.sip_num; idx++) {
-        netAddr.s_addr = inet_addr(loader_arguments.sip[idx]);
-        add_filter_host(sip_filter_map_fd, &netAddr.s_addr);
-    }
+    update_filter_sip(sip_filter_map_fd);
+    update_en_sip_filter(en_sip_filter_map_fd, sip_filter_map_fd);
 
     /* Attach BPF program to interface */
-    err = bpf_set_link_xdp_fd(loader_arguments.if_idx, progFd, XDP_FLAGS_UPDATE_IF_NOEXIST);
+    err = bpf_set_link_xdp_fd(user_arguments.if_idx, progFd, XDP_FLAGS_UPDATE_IF_NOEXIST);
     if (err) {
         fprintf(stderr, "ERR: ifindex(%d) link set xdp fd failed (%d): %s\n",
-            loader_arguments.if_idx, err, strerror(-err));
+            user_arguments.if_idx, err, strerror(-err));
         return err;
     }
-    printf("BPF attatched to interface: %d\n", loader_arguments.if_idx);
+    printf("BPF attatched to interface: %d\n", user_arguments.if_idx);
+
+    /* Use the command name as subdir for exporting/pinning maps */
+    err = pin_maps_in_bpf_object(obj, prog_name_p, NULL, 1);
+    if (err) {
+        fprintf(stderr, "ERR: pinning maps\n");
+        return err;
+    }
 
     /* Keep going */
     signal(SIGINT, sig_handler);
@@ -233,8 +333,10 @@ int main(int argc, char **argv) {
     }
     printf("Stopped, start to unload BPF\n");
 
+    pin_maps_in_bpf_object(obj, prog_name_p, NULL, 0);
+
     /* Detach XDP from interface */
-    xdp_link_detach(loader_arguments.if_idx, XDP_FLAGS_UPDATE_IF_NOEXIST);
+    xdp_link_detach(user_arguments.if_idx, XDP_FLAGS_UPDATE_IF_NOEXIST);
     printf("Done\n");
     return 0;
 }

@@ -14,24 +14,25 @@
 #include <stdint.h>
 #include <arpa/inet.h>
 
+#include "xdp_util_kern.h"
 #include "xdp_cut_pkt_def.h"
 
 // Creates maps, specify name, type, key/value size, and map size.
-struct bpf_map_def SEC("maps") sip_filter = {
+MAPS(TBL_NAME_SIP) = {
     .type = BPF_MAP_TYPE_HASH,
     .key_size = sizeof(uint32_t),
     .value_size = sizeof(uint32_t),
     .max_entries = MAX_NBR_SIP_TBL,
 };
 
-struct bpf_map_def SEC("maps") mod_total = {
+MAPS(TBL_NAME_CNT) = {
     .type = BPF_MAP_TYPE_ARRAY,
     .key_size = sizeof(int),
     .value_size = sizeof(uint64_t),
     .max_entries = 1,
 };
 
-struct bpf_map_def SEC("maps") en_sip_filter = {
+MAPS(TBL_NAME_EN_SIP) = {
     .type = BPF_MAP_TYPE_ARRAY,
     .key_size = sizeof(int),
     .value_size = sizeof(uint32_t),
@@ -43,7 +44,7 @@ static inline int is_en_sip_filter(void) {
     uint32_t *en_flag;
     int index = 0;
 
-    en_flag = bpf_map_lookup_elem(&en_sip_filter, &index);
+    en_flag = bpf_map_lookup_elem(&TBL_NAME_EN_SIP, &index);
     if (en_flag) {
         return (*en_flag != 0);
     }
@@ -81,11 +82,11 @@ static inline void update_mod_c (void) {
     int index = 0;
     uint64_t one = 1LLU;
 
-    mod_c = bpf_map_lookup_elem(&mod_total, &index);
+    mod_c = bpf_map_lookup_elem(&TBL_NAME_CNT, &index);
     if (mod_c) {
         *mod_c += 1;
     } else {
-        bpf_map_update_elem(&mod_total, &index, &one, BPF_NOEXIST);
+        bpf_map_update_elem(&TBL_NAME_CNT, &index, &one, BPF_NOEXIST);
     }
 }
 
@@ -142,13 +143,13 @@ int myprogram(struct xdp_md *ctx) {
             {
                 uint32_t *count;
 
-                count = bpf_map_lookup_elem(&sip_filter, &ip->saddr);
+                count = bpf_map_lookup_elem(&TBL_NAME_SIP, &ip->saddr);
 
                 if (! count) {
-#ifdef ENABLE_DBG
-                    bpf_trace_printk("pass sip - %lx\\n", ip->saddr);
-#endif
+                    bpf_debug("pass sip - %lx\n", ip->saddr);
                     return XDP_PASS;
+                } else {
+                    bpf_debug("trunc sip - %lx\n", ip->saddr);
                 }
             }
         }

@@ -35,8 +35,8 @@ CLFLAGS += -I${LIBBPF_SRC}/build/usr/include/
 CLFLAGS += -I${LIBBPF_SRC}
 CLFLAGS += -I/usr/include/
 
-# Use DBG=1 to generate intermediate files
-CL_DBG_FLAGS := $(if $(DBG), -v --save-temps, )
+# Use ITMP=1 to generate intermediate files
+CL_DBG_FLAGS := $(if $(ITMP), -v --save-temps, )
 
 LDFLAGS = -lelf
 
@@ -46,7 +46,7 @@ EXTRA_CFLAGS=-Werror
 LINUXINCLUDE := -I${SRC_DIR}/inc/kernel
 
 # Objects that xxx_user program is linked with:
-OBJECTS_UTIL = xdp_util.o
+OBJECTS_UTIL = xdp_util_user.o
 OBJECTS_USER = $(patsubst %.o, $(OUTPUT_DIR)/lib/%.o, $(OBJECTS_UTIL))
 
 #
@@ -64,12 +64,12 @@ CC = gcc
 
 all: $(TARGETS_ALL) $(KERN_OBJECTS)
 
-.PHONY: clean clean-dbg
+.PHONY: clean clean-tmp
 
-clean: clean-dbg
+clean: clean-tmp
 	find ${OUTPUT_DIR} ! -name '.gitignore' -type f -exec rm {} \;
 
-clean-dbg:
+clean-tmp:
 	find . -type f \( -name \*.bc -o -name \*.i -o -name \*.s \) -delete
 
 # Compiling of eBPF restricted-C code with LLVM

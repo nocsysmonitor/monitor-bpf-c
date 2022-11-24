@@ -1,10 +1,10 @@
 #include <stdint.h>
 #include <linux/bpf.h>
 #include <bpf/bpf_endian.h>
-#include <bpf_helpers.h>
+#include <bpf/bpf_helpers.h>
 
 #include "xdp_dedup_def.h"
-#include "xdp_util.h"
+#include "xdp_util_kern.h"
 
 char _license[] SEC("license") = "GPL";
 
