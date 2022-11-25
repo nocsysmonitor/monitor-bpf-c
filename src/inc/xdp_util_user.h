@@ -26,6 +26,9 @@ char *get_map_path(char *sub_dir, char *map_name);
 int pin_maps_in_bpf_object(
     struct bpf_object *bpf_obj, char *subdir, char *map_name_p, int is_pin);
 
+int access_bpf_kern_map(
+    struct bpf_object *obj_p, char *map_name_p);
+
 int access_pinned_map (
     char *sub_dir_p, char *map_name_p,
     struct bpf_map_info *exp_info_p);

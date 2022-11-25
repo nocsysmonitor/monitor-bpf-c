@@ -35,5 +35,9 @@ enum cb_idx {
 #define LOOP_MAX_ONE_ROUND      20
 #define DFLT_HASH_LEN           0xfff
 
+/* max packet len = 240 * 7 + 12 (done in CB_FIN) */
+#define LOOP_MAX_LEN        (CB_FIN * LOOP_MAX_ONE_ROUND * 12)
+#define LOOP_MAX_LEN_       1692 //need this for macro expansion
+
 #endif
 

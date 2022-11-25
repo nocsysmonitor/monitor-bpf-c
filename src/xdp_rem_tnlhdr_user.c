@@ -16,19 +16,13 @@
 #include <bpf/libbpf.h>
 
 #include "xdp_util_user.h"
+#include "xdp_util_comm.h"
 #include "xdp_rem_tnlhdr_def.h"
 
-/* MACRO FUNCTION DECLARATIONS
- */
-#define dbglvl_help     "The verbosity of debug messages (" xstr(0) \
-                          "~" xstr(1) ")."
-
-#define inf_help        "The name of interface to use."
 #define en_help         "The idx of option to enable. (" xstr(0) "~" \
                           xstr(5) ")."
 #define dis_help        "The idx of option to disable. (" xstr(0) "~" \
                           xstr(5) ")."
-
 
 /* DATA TYPE DECLARATIONS
  */
@@ -36,10 +30,11 @@ typedef struct {
     char    *en_opt_p[OP_MAX];
     char    *dis_opt_p[OP_MAX];
 
-    int     dbg_lvl;
     int     if_idx;
     int     en_num;
     int     dis_num;
+    int     lst_info;
+    int     detach;
 } arguments_t;
 
 typedef struct {
@@ -50,18 +45,19 @@ typedef struct {
 /* STATIC VARIABLE DEFINITIONS
  */
 static arguments_t user_arguments = {
-    .dbg_lvl = 0,
     .en_num  = 0,
     .dis_num = 0,
+    .lst_info= 0,
+    .detach  = 0,
+    .if_idx  = -1,
 };
 
 static struct argp_option user_options[] = {
     { 0,0,0,0, "Optional:", 7 },
-    { "dbg_lvl", 'd', "level",     0, dbglvl_help, 0 },
     { "en",      'e', "idx",       0, en_help,     0 },
-    { "dis",     'u', "idx",       0, dis_help,    0 },
-    { 0,0,0,0, "Required for loading xdp kernel program:", 5 },
-    { "inf",     'i', "interface", 0, inf_help,    0 },
+    { "dis",     'd', "idx",       0, dis_help,    0 },
+    { "list",    'l', 0, 0,           lst_help,    0 },
+    { 0,         'u', 0, 0,           det_help,    0 },
     {0}
 };
 
@@ -83,6 +79,21 @@ static prog_ele_t cb_prog_ar [] = {
     _cb_ar_one(CUT_2),
 };
 
+static char *opt_name_ar [] = {
+        [OP_DBG]    = "DBG",
+        [OP_VXLAN]  = "VXLAN",
+        [OP_GTP]    = "GTP",
+        [OP_GRE]    = "GRE",
+        [OP_GENEVE] = "GENEVE",
+};
+
+static char *cnt_name_ar [] = {
+        [CNT_VXLAN]  = "VXLAN",
+        [CNT_GTP]    = "GTP",
+        [CNT_GRE]    = "GRE",
+        [CNT_GENEVE] = "GENEVE",
+};
+
 static volatile sig_atomic_t keep_running = 1;
 
 static void sig_handler(int _) {
@@ -100,39 +111,33 @@ user_parse_opt(int key, char *arg, struct argp_state *state)
 
     switch (key)
     {
-    case 'd':
-        errno = 0;
-
-        arguments_p->dbg_lvl = strtoul(arg, NULL, 0);
-        if (errno != 0) {
-            argp_error(state, "Invalid level \"%s\"", arg);
-            return errno;
-        }
-        break;
-
-    case 'i':
-        arguments_p->if_idx = if_nametoindex(arg);
-        if (errno != 0) {
-            argp_error(state, "Invalid interface name \"%s\"", arg);
-            return errno;
-        }
+    case 'l':
+        arguments_p->lst_info = 1;
         break;
 
     case 'e':
         arguments_p->en_opt_p[arguments_p->en_num++] = arg;
         break;
 
-    case 'u':
+    case 'd':
         arguments_p->dis_opt_p[arguments_p->dis_num++] = arg;
+        break;
+
+    case 'u':
+        arguments_p->detach = 1;
         break;
 
     case ARGP_KEY_ARG:
         /* Too many arguments. */
         // for arguments, not for options above.
-        // we do not accept any arguments
-        if (state->arg_num > 0)
+        if (state->arg_num > 1)
             argp_usage (state);
 
+        arguments_p->if_idx = if_nametoindex(arg);
+        if (errno != 0) {
+            argp_error(state, "Invalid interface name \"%s\"", arg);
+            return errno;
+        }
         break;
 
     case ARGP_KEY_END:
@@ -150,70 +155,35 @@ user_parse_opt(int key, char *arg, struct argp_state *state)
     return 0;
 }
 
-//static void enable_opt(struct bpf_object *obj, uint32_t op_idx, int is_en) {
 static void enable_opt(int map_fd, uint32_t op_idx, int is_en) {
-    static char *name_ar [] = {
-        [OP_DBG]    = "DBG",
-        [OP_VXLAN]  = "VXLAN",
-        [OP_GTP]    = "GTP",
-        [OP_GRE]    = "GRE",
-        [OP_GENEVE] ="GENEVE",
-    };
     int ret;
 
     if (is_en) {
         ret = bpf_map_update_elem(map_fd, &op_idx, (uint32_t []) {1}, BPF_ANY);
         if (ret < 0) {
-            fprintf(stderr, "ERR: enable option (%d/%s) failed\n", op_idx, name_ar[op_idx]);
+            fprintf(stderr, "ERR: enable option (%d/%s) failed\n", op_idx, opt_name_ar[op_idx]);
         } else {
-            printf(" - Enable option (%s)\n", name_ar[op_idx]);
+            printf(" - Enable option (%s)\n", opt_name_ar[op_idx]);
         }
 
     } else {
         ret = bpf_map_update_elem(map_fd, &op_idx, (uint32_t []) {0}, BPF_ANY);
         if (ret < 0) {
-            fprintf(stderr, "ERR: disable option (%d/%s) failed\n", op_idx, name_ar[op_idx]);
+            fprintf(stderr, "ERR: disable option (%d/%s) failed\n", op_idx, opt_name_ar[op_idx]);
         } else {
-            printf(" - Disable option (%s)\n", name_ar[op_idx]);
+            printf(" - Disable option (%s)\n", opt_name_ar[op_idx]);
         }
     }
 }
 
-static void dump_cnt_tbl(int map_fd, uint32_t cnt) {
-    static char *name_ar [] = {
-        [CNT_VXLAN]  = "VXLAN",
-        [CNT_GTP]    = "GTP",
-        [CNT_GRE]    = "GRE",
-        [CNT_GENEVE] = "GENEVE",
-    };
-
-    uint32_t idx;
-    uint32_t value;
-    int err;
-
-    if (cnt % 10 != 0)
-        return;
-
-    for (idx =0; idx < CNT_MAX; idx++) {
-
-        err = bpf_map_lookup_elem(map_fd, &idx, &value);
-        if (err) {
-            fprintf(stderr, "get cnt failed (%d)...\n", idx);
-            continue;
-        }
-
-        printf("idx/name/value - %04x/%6s/%08x\n", idx, name_ar[idx], value);
-    }
-    printf("\n");
-}
-
-void update_options (int map_fd) {
+static void update_options (int map_fd) {
     int idx, opt_idx;
 
     if (map_fd <= 0)
         return;
 
     for (idx =0; idx <user_arguments.en_num; idx ++) {
+        errno = 0;
         opt_idx = strtoul(user_arguments.en_opt_p[idx], NULL, 0);
         if (errno != 0) {
             continue;
@@ -223,6 +193,7 @@ void update_options (int map_fd) {
     }
 
     for (idx =0; idx <user_arguments.dis_num; idx ++) {
+        errno = 0;
         opt_idx = strtoul(user_arguments.dis_opt_p[idx], NULL, 0);
         if (errno != 0) {
             continue;
@@ -232,16 +203,82 @@ void update_options (int map_fd) {
     }
 }
 
+static void list_info(int opt_map_fd, int cnt_map_fd) {
+    char *ok_fmt_str = "\tIdx/Name/Value - %02x/%6s/%08x\n";
+    char *er_fmt_str = "\tIdx/Name/Value - %02x/%6s/ERR\n";
+    char *ok_fmt_str_cnt = "\tIdx/Name/Value - %02x/%6s/%08jx\n";
+    uint32_t idx, value;
+    uint64_t cnt_val;
+    int err;
+
+    printf("\n");
+    if (opt_map_fd > 0) {
+        //option info
+        printf("Option Info:\n");
+        for (idx =0; idx <OP_MAX; idx++) {
+            err = bpf_map_lookup_elem(opt_map_fd, &idx, &value);
+            if (err) {
+                printf(er_fmt_str, idx, opt_name_ar[idx]);
+                continue;
+            }
+            printf(ok_fmt_str, idx, opt_name_ar[idx], value);
+        }
+        printf("\n");
+    }
+
+    if (cnt_map_fd > 0) {
+        printf("Counter Info:\n");
+        //counter info
+        for (idx =0; idx <CNT_MAX; idx++) {
+            err = bpf_map_lookup_elem(cnt_map_fd, &idx, &cnt_val);
+            if (err) {
+                printf(er_fmt_str, idx, cnt_name_ar[idx]);
+                continue;
+            }
+            printf(ok_fmt_str_cnt, idx, cnt_name_ar[idx], cnt_val);
+        }
+        printf("\n");
+    }
+}
+
+static void process_user_options(
+    arguments_t *arg_p, char *prog_name_p, struct bpf_object *obj_p) {
+
+    int cnt_map_fd, opt_map_fd;
+
+    if (NULL != obj_p) {
+        // need to load kernel program, use obj_p to access map
+        cnt_map_fd = access_bpf_kern_map(obj_p, xstr(TBL_NAME_CNT));
+        opt_map_fd = access_bpf_kern_map(obj_p, xstr(TBL_NAME_OPT));
+
+        // default enable VXLAN/GRE/GTP/GENEVE
+        enable_opt(opt_map_fd, OP_VXLAN, 1);
+        enable_opt(opt_map_fd, OP_GTP, 1);
+        enable_opt(opt_map_fd, OP_GRE, 1);
+        enable_opt(opt_map_fd, OP_GENEVE, 1);
+    } else {
+        // use prog_name_p to access pinned ma
+        cnt_map_fd = access_pinned_map(prog_name_p, xstr(TBL_NAME_CNT), NULL);
+        opt_map_fd = access_pinned_map(prog_name_p, xstr(TBL_NAME_OPT), NULL);
+    }
+
+    update_options(opt_map_fd);
+
+    if (arg_p->lst_info > 0) {
+        list_info(opt_map_fd, cnt_map_fd);
+    }
+}
+
 int main(int argc, char **argv) {
     char *prog_name_p;
     char kern_prog_name[256]; //basename, ex: xxx
     char kern_prog_path[256]; //including path, ex yyy/yyy/xxx
-    int main_fd, err, fd, cb_tbl_fd, cnt_tbl_fd, opt_tbl_fd;
+    int main_fd, err, fd, cb_tbl_fd;
     struct bpf_program *prog;
     struct bpf_object *obj;
 
     /* Our argp parser. */
-    static struct argp argp = { user_options, user_parse_opt, NULL, NULL };
+    static struct argp argp = { user_options, user_parse_opt, args_doc, prog_doc };
     /* Parse our arguments; every option seen by `parse_opt' will be
      * reflected inarguments.
      */
@@ -254,10 +291,20 @@ int main(int argc, char **argv) {
     }
 
     // only access pin map to show info or en/dis-able options.
-    if (user_arguments.if_idx == 0) {
-        opt_tbl_fd = access_pinned_map(prog_name_p, xstr(TBL_NAME_OPT), NULL);
-        update_options(opt_tbl_fd);
+    if (user_arguments.if_idx == -1) {
+        process_user_options(&user_arguments, prog_name_p, NULL);
         return 0;
+    }
+
+    // detach program first
+    if (user_arguments.detach) {
+        /* Detach XDP from interface */
+        if ((err = bpf_set_link_xdp_fd(
+                    user_arguments.if_idx, -1, XDP_FLAGS_UPDATE_IF_NOEXIST)) < 0) {
+            fprintf(stderr, "ERR: link set xdp unload failed (err=%d):%s\n",
+                    err, strerror(-err));
+            return err;
+        }
     }
 
     snprintf(kern_prog_name, sizeof(kern_prog_name), "%s_kern.o", prog_name_p);
@@ -279,33 +326,13 @@ int main(int argc, char **argv) {
         return -1;
     }
 
+    process_user_options(&user_arguments, NULL, obj);
+
     cb_tbl_fd = bpf_object__find_map_fd_by_name(obj, xstr(TBL_NAME_CB));
     if (cb_tbl_fd < 0) {
         fprintf(stderr, "ERR: finding %s in obj file failed\n", xstr(TBL_NAME_CB));
         return -1;
     }
-
-    cnt_tbl_fd = bpf_object__find_map_fd_by_name(obj, xstr(TBL_NAME_CNT));
-    if (cnt_tbl_fd < 0) {
-        fprintf(stderr, "ERR: finding %s in obj file failed\n", xstr(TBL_NAME_CNT));
-        return -1;
-    }
-
-    opt_tbl_fd = bpf_object__find_map_fd_by_name(obj, xstr(TBL_NAME_OPT));
-    if (opt_tbl_fd < 0) {
-        fprintf(stderr, "ERR: finding %s in obj file failed\n", xstr(TBL_NAME_OPT));
-        return -1;
-    }
-
-    if (user_arguments.dbg_lvl > 0) {
-        enable_opt(opt_tbl_fd, OP_DBG, 1);
-    }
-
-    // default enable VXLAN/GRE/GTP/GENEVE
-    enable_opt(opt_tbl_fd, OP_VXLAN, 1);
-    enable_opt(opt_tbl_fd, OP_GTP, 1);
-    enable_opt(opt_tbl_fd, OP_GRE, 1);
-    enable_opt(opt_tbl_fd, OP_GENEVE, 1);
 
     /* install program to cb_table */
     for (int idx = 0; idx < sizeof(cb_prog_ar) / sizeof(cb_prog_ar[0]); idx++) {
@@ -342,12 +369,8 @@ int main(int argc, char **argv) {
     /* Keep going */
     signal(SIGINT, sig_handler);
     signal(SIGTERM, sig_handler);
-    printf("Ctrl+c to exit and unload BPF\n");
+    printf("Press ctrl+c to exit and unload BPF\n");
     while(keep_running) {
-        static uint32_t cnt = 1;
-
-        dump_cnt_tbl(cnt_tbl_fd, cnt ++);
-
         usleep(1000000); // 1 sec
     }
     printf("Stopped, start to unload BPF\n");

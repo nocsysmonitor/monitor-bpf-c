@@ -37,7 +37,7 @@ MAPS(TBL_NAME_DROP) = {
 };
 
 /* max packet len = 240 * 7 + 12 (done in CB_FIN) */
-const int LOOP_MAX_LEN = CB_FIN * LOOP_MAX_ONE_ROUND * 12;
+//const int LOOP_MAX_LEN = CB_FIN * LOOP_MAX_ONE_ROUND * 12;
 
 struct meta_info {
     uint32_t    a;

@@ -25,11 +25,18 @@ dpkg -i xxx.deb
 
 | Command     | Brief Description | Ex:
 |:---         |:---         |:---
-| xdp_cut_pkt | Truncate packets | xdp_cut_pkt -e 192.168.1.1 -i eth0 |
-| xdp_dedup | Discard duplicate packets | xdp_dedup -i eth0 |
-| xdp_rem_tnlhdr| Remove GTPv1-U/Vxlan/GRE/GENEVE header | xdp_rem_tnlhdr -i eth0 |
+| xdp_cut_pkt | Truncate packets | xdp_cut_pkt -e 1.1.1.1 -e 2.2.2.2 eth0 |
+| xdp_dedup | Discard duplicate packets | xdp_dedup eth0 |
+| xdp_rem_tnlhdr| Remove GTPv1-U/Vxlan/GRE/GENEVE header | xdp_rem_tnlhdr eth0 |
 
 NOTE:
 1. Use {command} --help for more information.
 
-2. Use kill -TERM {pid} to stop the process, then the BPF program can be unloaded correclty. Otherwise, it may need to use "bpftool net detach xdp dev {dev}" to unload BPF program manually.
+2. Need to mount bpf fs first, i.e., mount -t bpf bpf /sys/fs/bpf/.
+
+3. To unload BPF kernel program correclty, use "kill -TERM {pid}" to stop the process.
+
+4. Use "bpftool net detach xdp dev {dev}" to unload BPF kernel program manually.
+
+5. Use "{command} -u {dev}" to detach kernel program if previous kernel program is not detached correctly.
+

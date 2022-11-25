@@ -118,6 +118,7 @@ cp-bin:
 build-deb: all print-control cp-bin
 	dpkg -b $(DEB_PATH) acc-bpf.deb
 	dpkg -c acc-bpf.deb
+	@cat $(DEB_PATH)/DEBIAN/control
 
 clean-deb:
 	rm acc-bpf.deb

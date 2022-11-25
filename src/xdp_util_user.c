@@ -100,7 +100,20 @@ int pin_maps_in_bpf_object(
     return 0;
 }
 
-int access_pinned_map (
+int access_bpf_kern_map(
+    struct bpf_object *obj_p, char *map_name_p) {
+
+    int map_fd;
+
+    map_fd = bpf_object__find_map_fd_by_name(obj_p, map_name_p);
+    if (map_fd < 0) {
+        fprintf(stderr, "ERR: finding %s in obj file failed\n", map_name_p);
+    }
+
+    return map_fd;
+}
+
+int access_pinned_map(
     char *sub_dir_p, char *map_name_p,
     struct bpf_map_info *exp_info_p) {
 
@@ -114,6 +127,7 @@ int access_pinned_map (
 
     map_fd = open_bpf_map_file(map_path_p, &info);
     if (map_fd < 0) {
+        fprintf(stderr, "ERR: access pinned map (%s) failed\n", map_name_p);
         return -1;
     }
 
@@ -190,3 +204,4 @@ int open_bpf_map_file(
 
     return fd;
 }
+
