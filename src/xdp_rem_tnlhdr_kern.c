@@ -672,7 +672,6 @@ PROG(CB_NAME_CUT_1) (struct CTXTYPE *ctx)
         }
 
         // move eth + vlan headear forward to strip the gtp tunnel header
-        #pragma unroll
         for (int i=0; i <22; i++)
         {
             char *src, *dst;

@@ -25,7 +25,7 @@ dpkg -i xxx.deb
 
 | Command     | Brief Description | Ex:
 |:---         |:---         |:---
-| xdp_cut_pkt | Truncate packets | xdp_cut_pkt -e 1.1.1.1 -e 2.2.2.2 eth0 |
+| xdp_cut_pkt | Truncate packets <br> (apply only for ipv6/ipv4 udp/tcp packets, sip filtering is available for ipv4)  | xdp_cut_pkt -e 1.1.1.1 -e 2.2.2.2 eth0 |
 | xdp_dedup | Discard duplicate packets | xdp_dedup eth0 |
 | xdp_rem_tnlhdr| Remove GTPv1-U/Vxlan/GRE/GENEVE header | xdp_rem_tnlhdr eth0 |
 

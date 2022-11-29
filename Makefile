@@ -8,6 +8,7 @@ TARGETS := xdp_cut_pkt xdp_dedup xdp_rem_tnlhdr
 LIBBPF_SRC= /home/vagrant/libbpf-0.4.0/src
 OUTPUT_DIR= ${PWD}/build
 SRC_DIR   = ${PWD}/src
+DEP_DIR   = ${PWD}/.dep
 #KERNELDIR = /usr/src/linux-headers-$(shell uname -r)/include
 
 # Files under src/ have a name-scheme:
@@ -20,13 +21,15 @@ SRC_DIR   = ${PWD}/src
 # program.
 
 
-TARGETS_ALL = $(TARGETS)
-
 # Generate file name-scheme based on TARGETS
-KERN_SOURCES = ${TARGETS_ALL:=_kern.c}
-USER_SOURCES = ${TARGETS_ALL:=_user.c}
+KERN_SOURCES = ${TARGETS:=_kern.c}
+USER_SOURCES = ${TARGETS:=_user.c}
 KERN_OBJECTS = ${KERN_SOURCES:.c=.o}
 USER_OBJECTS = ${USER_SOURCES:.c=.o}
+
+TARGETS_KERN = $(patsubst %.c, $(OUTPUT_DIR)/%.o, $(KERN_SOURCES))
+TARGETS_USER = $(patsubst %, $(OUTPUT_DIR)/%, $(TARGETS))
+
 
 # FLAGS for CLANG
 CLFLAGS := -g -O2 -Wall
@@ -42,12 +45,14 @@ LDFLAGS = -lelf
 
 EXTRA_CFLAGS=-Werror
 
-# Local copy of header files took from linux kernel
+DEPFLAGS = -MT $@ -MMD -MP -MF $(DEP_DIR)/$(patsubst %.c,%.d,$(<F))
+
+# Local copy of header files taken from linux kernel
 LINUXINCLUDE := -I${SRC_DIR}/inc/kernel
 
 # Objects that xxx_user program is linked with:
-OBJECTS_UTIL = xdp_util_user.o
-OBJECTS_USER = $(patsubst %.o, $(OUTPUT_DIR)/lib/%.o, $(OBJECTS_UTIL))
+USER_SOURCES_UTIL = xdp_util_user.c
+USER_OBJECTS_UTIL = $(patsubst %.c, $(OUTPUT_DIR)/lib/%.o, $(USER_SOURCES_UTIL))
 
 #
 # The static libbpf library
@@ -62,30 +67,47 @@ CC = gcc
 
 #NOSTDINC_FLAGS := -nostdinc -isystem $(shell $(CC) -print-file-name=include)
 
-all: $(TARGETS_ALL) $(KERN_OBJECTS)
+all: $(TARGETS_USER) $(TARGETS_KERN)
 
-.PHONY: clean clean-tmp clean-deb
+.PHONY: clean clean-tmp clean-deb clean-dep
 
-clean: clean-tmp clean-deb
-	find ${OUTPUT_DIR} ! -name '.gitignore' -type f -exec rm {} \;
+clean: clean-tmp clean-deb clean-dep
+	@find ${OUTPUT_DIR} ! -name '.gitignore' -type f -exec rm {} \;
 
 clean-tmp:
-	find . -type f \( -name \*.bc -o -name \*.i -o -name \*.s \) -delete
+	@find . -type f \( -name \*.bc -o -name \*.i -o -name \*.s \) -delete
+
+clean-dep:
+	@find ${DEP_DIR} ! -name '.gitignore' -type f -exec rm {} \;
+
+# search .c under $(SRC_DIR), etc...
+vpath %.c $(SRC_DIR)
+vpath %.h $(SRC_DIR)/inc
+
+# generate header dependency
+DEPS = $(wildcard $(DEP_DIR)/*.d)
+include $(DEPS)
+
+$(DEP_DIR)/%.d: ;
 
 # Compiling of eBPF restricted-C code with LLVM
 #
-$(KERN_OBJECTS): %.o:
-	$(CLANG) $(CL_DBG_FLAGS) $(CLFLAGS) $(LINUXINCLUDE) -target bpf -c $(SRC_DIR)/${@:.o=.c} -o ${OUTPUT_DIR}/$@
+${OUTPUT_DIR}/%_kern.o: %_kern.c $(DEP_DIR)/%_kern.d
+	$(CLANG) $(DEPFLAGS) $(CL_DBG_FLAGS) $(CLFLAGS) $(LINUXINCLUDE) -target bpf -c $< -o $@
 
 # util functions for xxx_user program
-$(OBJECTS_UTIL): %.o:
-	$(CLANG) $(CLFLAGS) -c $(SRC_DIR)/${@:.o=.c} -o ${OUTPUT_DIR}/lib/$@
+${OUTPUT_DIR}/lib/%.o: %.c $(DEP_DIR)/%.d
+	$(CLANG) $(DEPFLAGS) $(CLFLAGS) -c $< -o $@
 
-$(TARGETS): %: $(OBJECTS_UTIL)
-	$(CLANG) $(CLFLAGS) $(LDFLAGS) $(SRC_DIR)/$@_user.c \
-	    -o ${OUTPUT_DIR}/$@ $(OBJECTS_USER) $(LIBBPF) -lz
+# generate user targets
+${OUTPUT_DIR}/%: %_user.c $(USER_OBJECTS_UTIL) $(DEP_DIR)/%.d
+	$(CLANG) $(DEPFLAGS) $(CLFLAGS) $(LDFLAGS) $< \
+	    -o $@ $(USER_OBJECTS_UTIL) $(LIBBPF) -lz
 
 .DEFAULT_GOAL := all
+
+# not to remove util.o, .d
+.PRECIOUS: ${OUTPUT_DIR}/lib/%.o $(DEP_DIR)/%.d
 
 
 #
@@ -108,12 +130,12 @@ DEB_PATH=$(PWD)/debian
 export DEB_control
 
 print-control:
-	mkdir -p $(DEB_PATH)/DEBIAN
+	@mkdir -p $(DEB_PATH)/DEBIAN
 	@echo "$$DEB_control" > $(DEB_PATH)/DEBIAN/control
 
 cp-bin:
-	mkdir -p $(DEB_PATH)/usr/local/bin
-	cp $(OUTPUT_DIR)/* $(DEB_PATH)/usr/local/bin/ | true
+	@mkdir -p $(DEB_PATH)/usr/local/bin
+	@cp $(OUTPUT_DIR)/* $(DEB_PATH)/usr/local/bin/ | true
 
 build-deb: all print-control cp-bin
 	dpkg -b $(DEB_PATH) acc-bpf.deb
@@ -121,5 +143,5 @@ build-deb: all print-control cp-bin
 	@cat $(DEB_PATH)/DEBIAN/control
 
 clean-deb:
-	rm acc-bpf.deb
-	rm -rf $(DEB_PATH)
+	@rm acc-bpf.deb 2> /dev/null || true
+	@rm -rf $(DEB_PATH) 2> /dev/null || true
