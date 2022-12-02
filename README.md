@@ -32,7 +32,7 @@ dpkg -i xxx.deb
 NOTE:
 1. Use {command} --help for more information.
 
-2. Need to mount bpf fs first, i.e., mount -t bpf bpf /sys/fs/bpf/.
+2. Need to mount bpf fs first, i.e., mount -t bpf /sys/fs/bpf/.
 
 3. To unload BPF kernel program correclty, use "kill -TERM {pid}" to stop the process.
 

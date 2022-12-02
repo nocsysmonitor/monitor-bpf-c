@@ -92,7 +92,7 @@ int pin_maps_in_bpf_object(
         /* This will pin all maps in our bpf_object */
         err = bpf_object__pin_maps(bpf_obj, pin_dir_p);
         if (err) {
-            fprintf(stderr, "try to mount bpf fs first ! (mount -t bpf bpf /sys/fs/bpf/)\n");
+            fprintf(stderr, "try to mount bpf fs first ! (mount -t bpf /sys/fs/bpf/)\n");
             return -1;
         }
     }
