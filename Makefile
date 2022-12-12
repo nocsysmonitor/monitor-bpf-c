@@ -117,15 +117,16 @@ ${OUTPUT_DIR}/%: %_user.c $(USER_OBJECTS_UTIL) $(DEP_DIR)/%.d
 GIT_COMMIT=$(shell git describe --dirty --always)
 
 define DEB_control
-Package: acc-bpf
+Package: monitor-bpf
 Version: 1.0~$(GIT_COMMIT)
 Architecture: amd64
-Description: Accton BPF tools (C/#$(GIT_COMMIT))
+Description: Monitor BPF tools (C/#$(GIT_COMMIT))
 Maintainer:
 
 endef
 
 DEB_PATH=$(PWD)/debian
+DEB_NAME=monitor-bpf-1.0~$(GIT_COMMIT).deb
 
 export DEB_control
 
@@ -138,10 +139,11 @@ cp-bin:
 	@cp $(OUTPUT_DIR)/* $(DEB_PATH)/usr/local/bin/ | true
 
 build-deb: all print-control cp-bin
-	dpkg -b $(DEB_PATH) acc-bpf.deb
-	dpkg -c acc-bpf.deb
+	dpkg -b $(DEB_PATH) $(DEB_NAME)
+	dpkg -c $(DEB_NAME)
 	@cat $(DEB_PATH)/DEBIAN/control
 
 clean-deb:
-	@rm acc-bpf.deb 2> /dev/null || true
+	@rm $(DEB_NAME) 2> /dev/null || true
 	@rm -rf $(DEB_PATH) 2> /dev/null || true
+

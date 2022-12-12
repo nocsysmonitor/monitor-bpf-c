@@ -2,7 +2,7 @@
 
 ## 0. download the source code
 ```
-git clone https://github.com/SquidRo/acc-bpf2
+git clone https://github.com/nocsysmars/monitor-bpf-c
 ```
 
 ## 1. boot vm (vagrant is required)
@@ -13,7 +13,7 @@ vagrant up vm1
 
 ## 2. download the source code inside the vm1
 ```
-cd acc-bpf2
+cd monitor-bpf-c
 make build-deb
 ```
 
