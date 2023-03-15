@@ -8,33 +8,35 @@
 
 char _license[] SEC("license") = "GPL";
 
-MAPS(TBL_NAME_CB) = {
-    .type = BPF_MAP_TYPE_PROG_ARRAY,
-    .key_size = sizeof(uint32_t),
-    .value_size = sizeof(uint32_t),
-    .max_entries = CB_MAX,
-};
+static int cb_hash_p1(struct CTXTYPE *ctx);
+static int cb_hash_p2(struct CTXTYPE *ctx);
+static int cb_hash_p3(struct CTXTYPE *ctx);
+static int cb_hash_p4(struct CTXTYPE *ctx);
+static int cb_hash_p5(struct CTXTYPE *ctx);
+static int cb_hash_p6(struct CTXTYPE *ctx);
+static int cb_hash_match(struct CTXTYPE *ctx);
+static int cb_hash_fin(struct CTXTYPE *ctx);
 
-MAPS(TBL_NAME_HASH) = {
-    .type = BPF_MAP_TYPE_HASH,
-    .key_size = sizeof(uint32_t),
-    .value_size = sizeof(uint32_t),
-    .max_entries = HT_MAX,
-};
+struct {
+    __uint(type, BPF_MAP_TYPE_HASH);
+    __type(key,   __u32);
+    __type(value, __u32);
+    __uint(max_entries, HT_MAX);
+} TBL_NAME_HASH SEC(".maps");
 
-MAPS(TBL_NAME_OPT) = {
-    .type = BPF_MAP_TYPE_ARRAY,
-    .key_size = sizeof(uint32_t),
-    .value_size = sizeof(uint32_t),
-    .max_entries = OP_MAX,
-};
+struct {
+    __uint(type, BPF_MAP_TYPE_ARRAY);
+    __type(key,   __u32);
+    __type(value, __u32);
+    __uint(max_entries, OP_MAX);
+} TBL_NAME_OPT SEC(".maps");
 
-MAPS(TBL_NAME_DROP) = {
-    .type = BPF_MAP_TYPE_ARRAY,
-    .key_size = sizeof(uint32_t),
-    .value_size = sizeof(uint64_t),
-    .max_entries = 1,
-};
+struct {
+    __uint(type, BPF_MAP_TYPE_ARRAY);
+    __type(key,   __u32);
+    __type(value, __u64);
+    __uint(max_entries, 1);
+} TBL_NAME_DROP SEC(".maps");
 
 /* max packet len = 240 * 7 + 12 (done in CB_FIN) */
 //const int LOOP_MAX_LEN = CB_FIN * LOOP_MAX_ONE_ROUND * 12;
@@ -104,17 +106,19 @@ jhash_final(uint32_t *a, uint32_t *b, uint32_t *c)
       *c ^= *b; *c -= jhash_rot(*b, 24);
 }
 
+static uint32_t limit = DFLT_HASH_LEN;
+
 /* Returns the Jenkins hash of bytes at 'p', starting from 'basis' (finish part).
  * calculate the hash for final run (< 12 bytes).
  */
-PROG(CB_NAME_FIN) (struct CTXTYPE *ctx)
+static int cb_hash_fin(struct CTXTYPE *ctx)
 {
     void                *data = (void*)(long)ctx->data;
     void                *data_end = (void*)(long)ctx->data_end;
     struct meta_info    *meta;
     uint8_t             *src_p, *dst_p;
     uint32_t            tmp_3w[3] = {0};
-    uint32_t            len, limit, cur_idx;
+    uint32_t            len, cur_idx;
 
     data_end = (void*)(long)ctx->data_end;
     data = (void*)(long)ctx->data;
@@ -125,8 +129,6 @@ PROG(CB_NAME_FIN) (struct CTXTYPE *ctx)
     meta = (void *)(unsigned long)ctx->data_meta;
     if ((void *)&meta[1] > data)
         return XDP_PASS;
-
-    limit = get_opt_limit();
 
     if (len > limit)
         len = limit;
@@ -156,22 +158,602 @@ PROG(CB_NAME_FIN) (struct CTXTYPE *ctx)
         bpf_debug("pf hash - %x" DBGLR, meta->c);
     }
 
-    bpf_tail_call(ctx, &TBL_NAME_CB, CB_MATCH);
+    return cb_hash_match(ctx);
+}
 
-    return XDP_PASS;
+/* Returns the Jenkins hash of bytes at 'p', starting from 'basis'.
+ * caculate hash for part1 (241 ~ 480 bytes).
+ */
+static int cb_hash_p1(struct CTXTYPE *ctx)
+{
+    void                *data = (void*)(long)ctx->data;
+    void                *data_end = (void*)(long)ctx->data_end;
+    struct meta_info    *meta;
+    uint32_t            a, b, c, cur_idx,
+                        tmp_3w[3] = {0};
+    uint32_t            len = data_end - data;
+    uint8_t             *src_p, *dst_p, cur_step;
+
+    /* Check data_meta have room for meta_info struct */
+    meta = (void *)(unsigned long)ctx->data_meta;
+    if ((void *)&meta[1] > data)
+        return XDP_PASS;
+
+    a = meta->a;
+    b = meta->b;
+    c = meta->c;
+    cur_idx  = meta->cur_ofs;
+    meta->cur_step += 1;
+    cur_step = meta->cur_step;
+
+    if (len > limit)
+        len = limit;
+
+    /*if (get_opt(OP_DBG) > 0)
+    {
+        bpf_debug("p%d lim  - %d" DBGLR, cur_step, limit);
+    }*/
+
+    #pragma unroll
+    for (int i =0; i <LOOP_MAX_ONE_ROUND; i++)
+    {
+        if ((cur_idx + 12 > len)
+            ||(cur_idx >= LOOP_MAX_LEN)) //make verifier happy
+            break;
+
+        data = (void*)(long)ctx->data;
+
+        src_p = data + cur_idx;
+        dst_p = (uint8_t *) tmp_3w;
+
+        #pragma unroll
+        for (int j =0; j <12; j++)
+        {
+            if (src_p +1 > (uint8_t *) data_end)
+                break;
+
+            dst_p[j] = *src_p;
+        }
+
+        a += bpf_ntohl(tmp_3w[0]);
+        b += bpf_ntohl(tmp_3w[1]);
+        c += bpf_ntohl(tmp_3w[2]);
+        jhash_mix(&a, &b, &c);
+
+        cur_idx += 12;
+    }
+
+    meta->a = a;
+    meta->b = b;
+    meta->c = c;
+    meta->cur_ofs  = cur_idx;
+
+    if (get_opt(OP_DBG) > 0)
+    {
+        bpf_debug("p%d len  - %d" DBGLR, cur_step, len);
+        bpf_debug("p%d ofs  - %d" DBGLR, cur_step, cur_idx);
+        bpf_debug("p%d hash - %x" DBGLR, cur_step, meta->c);
+    }
+
+    if (cur_idx == len)
+    {
+        return cb_hash_match(ctx);
+    }
+    else if (len <= cur_idx + 12)
+    {
+        return cb_hash_fin(ctx);
+    }
+    else
+    {
+        return cb_hash_p2(ctx);
+    }
+}
+
+/* Returns the Jenkins hash of bytes at 'p', starting from 'basis'.
+ * caculate hash for part1 (481 ~ 720 bytes).
+ */
+static int cb_hash_p2(struct CTXTYPE *ctx)
+{
+    void                *data = (void*)(long)ctx->data;
+    void                *data_end = (void*)(long)ctx->data_end;
+    struct meta_info    *meta;
+    uint32_t            a, b, c, cur_idx,
+                        tmp_3w[3] = {0};
+    uint32_t            len = data_end - data;
+    uint8_t             *src_p, *dst_p, cur_step;
+
+    /* Check data_meta have room for meta_info struct */
+    meta = (void *)(unsigned long)ctx->data_meta;
+    if ((void *)&meta[1] > data)
+        return XDP_PASS;
+
+    a = meta->a;
+    b = meta->b;
+    c = meta->c;
+    cur_idx  = meta->cur_ofs;
+    meta->cur_step += 1;
+    cur_step = meta->cur_step;
+
+    if (len > limit)
+        len = limit;
+
+    /*if (get_opt(OP_DBG) > 0)
+    {
+        bpf_debug("p%d lim  - %d" DBGLR, cur_step, limit);
+    }*/
+
+    #pragma unroll
+    for (int i =0; i <LOOP_MAX_ONE_ROUND; i++)
+    {
+        if (  (cur_idx + 12 > len)
+            ||(cur_idx >= LOOP_MAX_LEN)) //make verifier happy
+            break;
+
+        data = (void*)(long)ctx->data;
+
+        src_p = data + cur_idx;
+        dst_p = (uint8_t *) tmp_3w;
+
+        #pragma unroll
+        for (int j =0; j <12; j++)
+        {
+            if (src_p +1 > (uint8_t *) data_end)
+                break;
+
+            dst_p[j] = *src_p;
+        }
+
+        a += bpf_ntohl(tmp_3w[0]);
+        b += bpf_ntohl(tmp_3w[1]);
+        c += bpf_ntohl(tmp_3w[2]);
+        jhash_mix(&a, &b, &c);
+
+        cur_idx += 12;
+    }
+
+    meta->a = a;
+    meta->b = b;
+    meta->c = c;
+    meta->cur_ofs  = cur_idx;
+
+    if (get_opt(OP_DBG) > 0)
+    {
+        bpf_debug("p%d len  - %d" DBGLR, cur_step, len);
+        bpf_debug("p%d ofs  - %d" DBGLR, cur_step, cur_idx);
+        bpf_debug("p%d hash - %x" DBGLR, cur_step, meta->c);
+    }
+
+    if (cur_idx == len)
+    {
+        return cb_hash_match(ctx);
+    }
+    else if (len <= cur_idx + 12)
+    {
+        return cb_hash_fin(ctx);
+    }
+    else
+    {
+        return cb_hash_p3(ctx);
+    }
+}
+
+/* Returns the Jenkins hash of bytes at 'p', starting from 'basis'.
+ * caculate hash for part1 (721 ~ 960 bytes).
+ */
+static int cb_hash_p3(struct CTXTYPE *ctx)
+{
+    void                *data = (void*)(long)ctx->data;
+    void                *data_end = (void*)(long)ctx->data_end;
+    struct meta_info    *meta;
+    uint32_t            a, b, c, cur_idx,
+                        tmp_3w[3] = {0};
+    uint32_t            len = data_end - data;
+    uint8_t             *src_p, *dst_p, cur_step;
+
+    /* Check data_meta have room for meta_info struct */
+    meta = (void *)(unsigned long)ctx->data_meta;
+    if ((void *)&meta[1] > data)
+        return XDP_PASS;
+
+    a = meta->a;
+    b = meta->b;
+    c = meta->c;
+    cur_idx  = meta->cur_ofs;
+    meta->cur_step += 1;
+    cur_step = meta->cur_step;
+
+    if (len > limit)
+        len = limit;
+
+    /*if (get_opt(OP_DBG) > 0)
+    {
+        bpf_debug("p%d lim  - %d" DBGLR, cur_step, limit);
+    }*/
+
+    #pragma unroll
+    for (int i =0; i <LOOP_MAX_ONE_ROUND; i++)
+    {
+        if (  (cur_idx + 12 > len)
+            ||(cur_idx >= LOOP_MAX_LEN)) //make verifier happy
+            break;
+
+        data = (void*)(long)ctx->data;
+
+        src_p = data + cur_idx;
+        dst_p = (uint8_t *) tmp_3w;
+
+        #pragma unroll
+        for (int j =0; j <12; j++)
+        {
+            if (src_p +1 > (uint8_t *) data_end)
+                break;
+
+            dst_p[j] = *src_p;
+        }
+
+        a += bpf_ntohl(tmp_3w[0]);
+        b += bpf_ntohl(tmp_3w[1]);
+        c += bpf_ntohl(tmp_3w[2]);
+        jhash_mix(&a, &b, &c);
+
+        cur_idx += 12;
+    }
+
+    meta->a = a;
+    meta->b = b;
+    meta->c = c;
+    meta->cur_ofs  = cur_idx;
+
+    if (get_opt(OP_DBG) > 0)
+    {
+        bpf_debug("p%d len  - %d" DBGLR, cur_step, len);
+        bpf_debug("p%d ofs  - %d" DBGLR, cur_step, cur_idx);
+        bpf_debug("p%d hash - %x" DBGLR, cur_step, meta->c);
+    }
+
+    if (cur_idx == len)
+    {
+        return cb_hash_match(ctx);
+    }
+    else if (len <= cur_idx + 12)
+    {
+        return cb_hash_fin(ctx);
+    }
+    else
+    {
+        return cb_hash_p4(ctx);
+    }
+}
+
+/* Returns the Jenkins hash of bytes at 'p', starting from 'basis'.
+ * caculate hash for part1 (961 ~ 1200 bytes).
+ */
+static int cb_hash_p4(struct CTXTYPE *ctx)
+{
+    void                *data = (void*)(long)ctx->data;
+    void                *data_end = (void*)(long)ctx->data_end;
+    struct meta_info    *meta;
+    uint32_t            a, b, c, cur_idx,
+                        tmp_3w[3] = {0};
+    uint32_t            len = data_end - data;
+    uint8_t             *src_p, *dst_p, cur_step;
+
+    /* Check data_meta have room for meta_info struct */
+    meta = (void *)(unsigned long)ctx->data_meta;
+    if ((void *)&meta[1] > data)
+        return XDP_PASS;
+
+    a = meta->a;
+    b = meta->b;
+    c = meta->c;
+    cur_idx  = meta->cur_ofs;
+    meta->cur_step += 1;
+    cur_step = meta->cur_step;
+
+    if (len > limit)
+        len = limit;
+
+    /*if (get_opt(OP_DBG) > 0)
+    {
+        bpf_debug("p%d lim  - %d" DBGLR, cur_step, limit);
+    }*/
+
+    #pragma unroll
+    for (int i =0; i <LOOP_MAX_ONE_ROUND; i++)
+    {
+        if (  (cur_idx + 12 > len)
+            ||(cur_idx >= LOOP_MAX_LEN)) //make verifier happy
+            break;
+
+        data = (void*)(long)ctx->data;
+
+        src_p = data + cur_idx;
+        dst_p = (uint8_t *) tmp_3w;
+
+        #pragma unroll
+        for (int j =0; j <12; j++)
+        {
+            if (src_p +1 > (uint8_t *) data_end)
+                break;
+
+            dst_p[j] = *src_p;
+        }
+
+        a += bpf_ntohl(tmp_3w[0]);
+        b += bpf_ntohl(tmp_3w[1]);
+        c += bpf_ntohl(tmp_3w[2]);
+        jhash_mix(&a, &b, &c);
+
+        cur_idx += 12;
+    }
+
+    meta->a = a;
+    meta->b = b;
+    meta->c = c;
+    meta->cur_ofs  = cur_idx;
+
+    if (get_opt(OP_DBG) > 0)
+    {
+        bpf_debug("p%d len  - %d" DBGLR, cur_step, len);
+        bpf_debug("p%d ofs  - %d" DBGLR, cur_step, cur_idx);
+        bpf_debug("p%d hash - %x" DBGLR, cur_step, meta->c);
+    }
+
+    if (cur_idx == len)
+    {
+        return cb_hash_match(ctx);
+    }
+    else if (len <= cur_idx + 12)
+    {
+        return cb_hash_fin(ctx);
+    }
+    else
+    {
+        return cb_hash_p5(ctx);
+    }
+}
+
+/* Returns the Jenkins hash of bytes at 'p', starting from 'basis'.
+ * caculate hash for part1 (1201 ~ 1440 bytes).
+ */
+static int cb_hash_p5(struct CTXTYPE *ctx)
+{
+    void                *data = (void*)(long)ctx->data;
+    void                *data_end = (void*)(long)ctx->data_end;
+    struct meta_info    *meta;
+    uint32_t            a, b, c, cur_idx,
+                        tmp_3w[3] = {0};
+    uint32_t            len = data_end - data;
+    uint8_t             *src_p, *dst_p, cur_step;
+
+    /* Check data_meta have room for meta_info struct */
+    meta = (void *)(unsigned long)ctx->data_meta;
+    if ((void *)&meta[1] > data)
+        return XDP_PASS;
+
+    a = meta->a;
+    b = meta->b;
+    c = meta->c;
+    cur_idx  = meta->cur_ofs;
+    meta->cur_step += 1;
+    cur_step = meta->cur_step;
+
+    if (len > limit)
+        len = limit;
+
+    /*if (get_opt(OP_DBG) > 0)
+    {
+        bpf_debug("p%d lim  - %d" DBGLR, cur_step, limit);
+    }*/
+
+    #pragma unroll
+    for (int i =0; i <LOOP_MAX_ONE_ROUND; i++)
+    {
+        if (  (cur_idx + 12 > len)
+            ||(cur_idx >= LOOP_MAX_LEN)) //make verifier happy
+            break;
+
+        data = (void*)(long)ctx->data;
+
+        src_p = data + cur_idx;
+        dst_p = (uint8_t *) tmp_3w;
+
+        #pragma unroll
+        for (int j =0; j <12; j++)
+        {
+            if (src_p +1 > (uint8_t *) data_end)
+                break;
+
+            dst_p[j] = *src_p;
+        }
+
+        a += bpf_ntohl(tmp_3w[0]);
+        b += bpf_ntohl(tmp_3w[1]);
+        c += bpf_ntohl(tmp_3w[2]);
+        jhash_mix(&a, &b, &c);
+
+        cur_idx += 12;
+    }
+
+    meta->a = a;
+    meta->b = b;
+    meta->c = c;
+    meta->cur_ofs  = cur_idx;
+
+    if (get_opt(OP_DBG) > 0)
+    {
+        bpf_debug("p%d len  - %d" DBGLR, cur_step, len);
+        bpf_debug("p%d ofs  - %d" DBGLR, cur_step, cur_idx);
+        bpf_debug("p%d hash - %x" DBGLR, cur_step, meta->c);
+    }
+
+    if (cur_idx == len)
+    {
+        return cb_hash_match(ctx);
+    }
+    else if (len <= cur_idx + 12)
+    {
+        return cb_hash_fin(ctx);
+    }
+    else
+    {
+        return cb_hash_p6(ctx);
+    }
+}
+
+/* Returns the Jenkins hash of bytes at 'p', starting from 'basis'.
+ * caculate hash for part1 (1441 ~ 1680 bytes).
+ */
+static int cb_hash_p6(struct CTXTYPE *ctx)
+{
+    void                *data = (void*)(long)ctx->data;
+    void                *data_end = (void*)(long)ctx->data_end;
+    struct meta_info    *meta;
+    uint32_t            a, b, c, cur_idx,
+                        tmp_3w[3] = {0};
+    uint32_t            len = data_end - data;
+    uint8_t             *src_p, *dst_p, cur_step;
+
+    /* Check data_meta have room for meta_info struct */
+    meta = (void *)(unsigned long)ctx->data_meta;
+    if ((void *)&meta[1] > data)
+        return XDP_PASS;
+
+    a = meta->a;
+    b = meta->b;
+    c = meta->c;
+    cur_idx  = meta->cur_ofs;
+    meta->cur_step += 1;
+    cur_step = meta->cur_step;
+
+    if (len > limit)
+        len = limit;
+
+    /*if (get_opt(OP_DBG) > 0)
+    {
+        bpf_debug("p%d lim  - %d" DBGLR, cur_step, cur_idx);
+    }*/
+
+    #pragma unroll
+    for (int i =0; i <LOOP_MAX_ONE_ROUND; i++)
+    {
+        if (  (cur_idx + 12 > len)
+            ||(cur_idx >= LOOP_MAX_LEN)) //make verifier happy
+            break;
+
+        data = (void*)(long)ctx->data;
+
+        src_p = data + cur_idx;
+        dst_p = (uint8_t *) tmp_3w;
+
+        #pragma unroll
+        for (int j =0; j <12; j++)
+        {
+            if (src_p +1 > (uint8_t *) data_end)
+		break;
+
+            dst_p[j] = *src_p;
+        }
+
+        a += bpf_ntohl(tmp_3w[0]);
+        b += bpf_ntohl(tmp_3w[1]);
+        c += bpf_ntohl(tmp_3w[2]);
+        jhash_mix(&a, &b, &c);
+
+        cur_idx += 12;
+    }
+
+    meta->a = a;
+    meta->b = b;
+    meta->c = c;
+    meta->cur_ofs  = cur_idx;
+
+    if (get_opt(OP_DBG) > 0)
+    {
+        bpf_debug("p%d len  - %d" DBGLR, cur_step, len);
+        bpf_debug("p%d ofs  - %d" DBGLR, cur_step, cur_idx);
+        bpf_debug("p%d hash - %x" DBGLR, cur_step, meta->c);
+    }
+
+    if (cur_idx == len)
+    {
+        return cb_hash_match(ctx);
+    }
+    else if (len <= cur_idx + 12)
+    {
+        return cb_hash_fin(ctx);
+    }
+    else
+    {
+        return XDP_PASS;
+    }
+}
+
+// drop the packet if hash already exists in table
+static int cb_hash_match(struct CTXTYPE *ctx)
+{
+    void                *data = (void*)(long)ctx->data;
+    struct meta_info    *meta;
+    uint32_t            *count;
+    uint64_t            *drop_c;
+    int                 rc = XDP_PASS;
+
+    /* Check data_meta have room for meta_info struct */
+    meta = (void *)(unsigned long)ctx->data_meta;
+    if ((void *)&meta[1] > data)
+        return XDP_PASS;
+
+    count = bpf_map_lookup_elem(&TBL_NAME_HASH, &meta->c);
+
+    if (count)  // check if this hash exists
+    {
+        *count += 1;
+
+        if (*count > 1)
+        {
+            drop_c = bpf_map_lookup_elem(&TBL_NAME_DROP, (uint32_t []) {0});
+            if (drop_c)
+            {
+                *drop_c += 1;
+            }
+            else
+            {
+                bpf_map_update_elem(
+                    &TBL_NAME_DROP, (uint32_t []) {0}, (uint64_t []) {1}, BPF_NOEXIST);
+            }
+
+            rc = XDP_DROP;
+
+            if (get_opt(OP_DBG) > 0)
+            {
+                bpf_debug("drop hash - %x" DBGLR, meta->c);
+            }
+        }
+    }
+    else        // if the hash for the key doesn't exist, create one
+    {
+        bpf_map_update_elem(&TBL_NAME_HASH, &meta->c, (uint32_t []) {1}, BPF_NOEXIST);
+    }
+
+    return rc;
 }
 
 /* Returns the Jenkins hash of bytes at 'p', starting from 'basis'.
  * caculate hash for part0 (<= 240 bytes)
  */
-PROG(CB_NAME_P0) (struct CTXTYPE *ctx)
+SEC("xdp")
+int xdp_dedup(struct CTXTYPE *ctx)
 {
+    // It seems 'Tail Call' is not supported in  LIBXDP,
+    // so make every 'tail call' to 'BPF to BPF' function call.
+    // Also change the function name from 'cb_hash_p0' to 'xdp_dedup',
+    // which can be showed by tool 'xdp-loader'.
     void                *data;
     void                *data_end;
     struct meta_info    *meta;
     uint32_t            a, b, c, cur_idx =0,
                         tmp_3w[3] = {0};
-    uint32_t            len, limit;
+    uint32_t            len;
     uint8_t             *src_p, *dst_p;
     int                 ret, basis = 0;
 
@@ -242,158 +824,14 @@ PROG(CB_NAME_P0) (struct CTXTYPE *ctx)
 
     if (len == cur_idx)
     {
-        bpf_tail_call(ctx, &TBL_NAME_CB, CB_MATCH);
+        return cb_hash_match(ctx);
     }
     else if (len <= cur_idx + 12)
     {
-        bpf_tail_call(ctx, &TBL_NAME_CB, CB_FIN);
+        return cb_hash_fin(ctx);
     }
     else
     {
-        bpf_tail_call(ctx, &TBL_NAME_CB, CB_P1);
+        return cb_hash_p1(ctx);
     }
-
-    return XDP_PASS;
-}
-
-/* Returns the Jenkins hash of bytes at 'p', starting from 'basis'.
- * caculate hash for part1 (240 ~ 1680 bytes).
- */
-PROG(CB_NAME_P1) (struct CTXTYPE *ctx)
-{
-    void                *data = (void*)(long)ctx->data;
-    void                *data_end = (void*)(long)ctx->data_end;
-    struct meta_info    *meta;
-    uint32_t            a, b, c, cur_idx,
-                        tmp_3w[3] = {0};
-    uint32_t            len = data_end - data;
-    uint8_t             *src_p, *dst_p, cur_step;
-    uint32_t            limit;
-
-    /* Check data_meta have room for meta_info struct */
-    meta = (void *)(unsigned long)ctx->data_meta;
-    if ((void *)&meta[1] > data)
-        return XDP_PASS;
-
-    a = meta->a;
-    b = meta->b;
-    c = meta->c;
-    cur_idx  = meta->cur_ofs;
-    meta->cur_step += 1;
-    cur_step = meta->cur_step;
-
-    limit = get_opt_limit();
-
-    if (len > limit)
-        len = limit;
-
-    if (get_opt(OP_DBG) > 0)
-    {
-        bpf_debug("p%d lim  - %d" DBGLR, cur_step, limit);
-    }
-
-    #pragma unroll
-    for (int i =0; i <LOOP_MAX_ONE_ROUND; i++)
-    {
-        if (  (cur_idx + 12 > len)
-            ||(cur_idx >= LOOP_MAX_LEN)) //make verifier happy
-            break;
-
-        data = (void*)(long)ctx->data;
-
-        src_p = data + cur_idx;
-        dst_p = (uint8_t *) tmp_3w;
-
-        #pragma unroll
-        for (int j =0; j <12; j++)
-        {
-            if (src_p +1 > (uint8_t *) data_end)
-                break;
-
-            dst_p[j] = *src_p;
-        }
-
-        a += bpf_ntohl(tmp_3w[0]);
-        b += bpf_ntohl(tmp_3w[1]);
-        c += bpf_ntohl(tmp_3w[2]);
-        jhash_mix(&a, &b, &c);
-
-        cur_idx += 12;
-    }
-
-    meta->a = a;
-    meta->b = b;
-    meta->c = c;
-    meta->cur_ofs  = cur_idx;
-
-    if (get_opt(OP_DBG) > 0)
-    {
-        bpf_debug("p%d len  - %d" DBGLR, cur_step, len);
-        bpf_debug("p%d ofs  - %d" DBGLR, cur_step, cur_idx);
-        bpf_debug("p%d hash - %x" DBGLR, cur_step, meta->c);
-    }
-
-    if (cur_idx == len)
-    {
-        bpf_tail_call(ctx, &TBL_NAME_CB, CB_MATCH);
-    }
-    else if (len <= cur_idx + 12)
-    {
-        bpf_tail_call(ctx, &TBL_NAME_CB, CB_FIN);
-    }
-    else
-    {
-        bpf_tail_call(ctx, &TBL_NAME_CB, cur_step+1);
-    }
-
-    return XDP_PASS;
-}
-
-// drop the packet if hash already exists in table
-PROG(CB_NAME_MATCH) (struct CTXTYPE *ctx)
-{
-    void                *data = (void*)(long)ctx->data;
-    struct meta_info    *meta;
-    uint32_t            *count;
-    uint64_t            *drop_c;
-    int                 rc = XDP_PASS;
-
-    /* Check data_meta have room for meta_info struct */
-    meta = (void *)(unsigned long)ctx->data_meta;
-    if ((void *)&meta[1] > data)
-        return XDP_PASS;
-
-    count = bpf_map_lookup_elem(&TBL_NAME_HASH, &meta->c);
-
-    if (count)  // check if this hash exists
-    {
-        *count += 1;
-
-        if (*count > 1)
-        {
-            drop_c = bpf_map_lookup_elem(&TBL_NAME_DROP, (uint32_t []) {0});
-            if (drop_c)
-            {
-                *drop_c += 1;
-            }
-            else
-            {
-                bpf_map_update_elem(
-                    &TBL_NAME_DROP, (uint32_t []) {0}, (uint64_t []) {1}, BPF_NOEXIST);
-            }
-
-            rc = XDP_DROP;
-
-            if (get_opt(OP_DBG) > 0)
-            {
-                bpf_debug("drop hash - %x" DBGLR, meta->c);
-            }
-        }
-    }
-    else        // if the hash for the key doesn't exist, create one
-    {
-        bpf_map_update_elem(&TBL_NAME_HASH, &meta->c, (uint32_t []) {1}, BPF_NOEXIST);
-    }
-
-    return rc;
 }

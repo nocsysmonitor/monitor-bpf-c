@@ -78,21 +78,38 @@ Vagrant.configure("2") do |config|
     vm1.vm.provision "shell", privileged: false, inline: <<-SHELL
         sudo sed -i 's/mirrorlist/#mirrorlist/g' /etc/yum.repos.d/CentOS-*
         sudo sed -i 's|#baseurl=http://mirror.centos.org|baseurl=http://vault.centos.org|g' /etc/yum.repos.d/CentOS-*
-        sudo dnf update -y
-        sudo dnf install -y https://www.elrepo.org/elrepo-release-8.el8.elrepo.noarch.rpm
+        sudo dnf install -y https://www.elrepo.org/elrepo-release-8.el8.elrepo.noarch.rpm wget
         sudo rpm --import https://www.elrepo.org/RPM-GPG-KEY-elrepo.org
         sudo dnf makecache
-        sudo dnf --enablerepo="elrepo-kernel" install -y kernel-lt
-        sudo dnf --enablerepo="elrepo-kernel" install -y kernel-lt-headers --allowerasing
+        wget https://linux.cc.iitk.ac.in/mirror/centos/elrepo/kernel/el8/x86_64/RPMS/kernel-ml-5.11.0-1.el8.elrepo.x86_64.rpm
+        wget https://linux.cc.iitk.ac.in/mirror/centos/elrepo/kernel/el8/x86_64/RPMS/kernel-ml-core-5.11.0-1.el8.elrepo.x86_64.rpm
+        wget https://linux.cc.iitk.ac.in/mirror/centos/elrepo/kernel/el8/x86_64/RPMS/kernel-ml-headers-5.11.0-1.el8.elrepo.x86_64.rpm
+        wget https://linux.cc.iitk.ac.in/mirror/centos/elrepo/kernel/el8/x86_64/RPMS/kernel-ml-modules-5.11.0-1.el8.elrepo.x86_64.rpm
+        sudo dnf install -y kernel-ml-core-5.11.0-1.el8.elrepo.x86_64.rpm
+        sudo dnf install -y kernel-ml-modules-5.11.0-1.el8.elrepo.x86_64.rpm
+        sudo dnf install -y kernel-ml-5.11.0-1.el8.elrepo.x86_64.rpm
+        sudo dnf install -y kernel-ml-headers-5.11.0-1.el8.elrepo.x86_64.rpm --allowerasing
     SHELL
     vm1.vm.provision "shell", privileged: true, reboot: true
     vm1.vm.provision "shell", privileged: false, inline: <<-SHELL
-        sudo dnf install clang llvm elfutils-libelf-devel perf wget net-tools vim -y
+        sudo dnf install clang llvm elfutils-libelf-devel libcap-devel perf net-tools vim git -y
         sudo dnf --enablerepo=powertools install libpcap-devel -y
-        sudo yum -y install gcc automake autoconf libtool make
-        wget https://github.com/libbpf/libbpf/archive/refs/tags/v0.4.0.tar.gz
-        tar zxvf v0.4.0.tar.gz
-        cd libbpf-0.4.0/src
+        sudo yum -y install gcc automake autoconf libtool make glibc-devel-2.28-164.el8.i686
+        sudo dnf update -y
+        git clone --recurse-submodules https://github.com/libbpf/bpftool.git
+        cd bpftool/src
+        make && sudo make install
+        cd
+        git clone --depth 1 --branch v1.3.1 --recurse-submodules https://github.com/xdp-project/xdp-tools.git
+        cd xdp-tools
+        ./configure
+        make
+        cd xdp-loader
+        sudo cp ./xdp-loader /usr/sbin/
+        cd ../lib/libbpf/src
+        mkdir build
+        DESTDIR=build make install
+        cd ../../libxdp
         mkdir build
         DESTDIR=build make install
     SHELL

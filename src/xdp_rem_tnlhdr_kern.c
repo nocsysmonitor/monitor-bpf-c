@@ -39,26 +39,31 @@ struct meta_info_cut {
     uint8_t     cn_id;          // refer to cn_idx
 } __attribute__((aligned(4)));
 
-MAPS(TBL_NAME_CB) = {
-    .type = BPF_MAP_TYPE_PROG_ARRAY,
-    .key_size = sizeof(uint32_t),
-    .value_size = sizeof(uint32_t),
-    .max_entries = CB_MAX,
-};
+static int cb_vlan(struct CTXTYPE *ctx);
+static int cb_ip4(struct CTXTYPE *ctx);
+static int cb_ip6(struct CTXTYPE *ctx);
+static int cb_gre(struct CTXTYPE *ctx);
+static int cb_udp(struct CTXTYPE *ctx);
+static int cb_tcp(struct CTXTYPE *ctx);
+static int cb_vxlan(struct CTXTYPE *ctx);
+static int cb_gtp(struct CTXTYPE *ctx);
+static int cb_geneve(struct CTXTYPE *ctx);
+static int cb_cut_1(struct CTXTYPE *ctx);
+static int cb_cut_2(struct CTXTYPE *ctx);
 
-MAPS(TBL_NAME_OPT) = {                // 0: off, 1: on
-    .type = BPF_MAP_TYPE_ARRAY,
-    .key_size = sizeof(uint32_t),
-    .value_size = sizeof(uint32_t),
-    .max_entries = OP_MAX,
-};
+struct {                // 0: off, 1: on
+    __uint(type, BPF_MAP_TYPE_ARRAY);
+    __type(key,   __u32);
+    __type(value, __u32);
+    __uint(max_entries, OP_MAX);
+} TBL_NAME_OPT SEC(".maps");
 
-MAPS(TBL_NAME_CNT) = {
-    .type = BPF_MAP_TYPE_ARRAY,
-    .key_size = sizeof(uint32_t),
-    .value_size = sizeof(uint64_t),
-    .max_entries = CNT_MAX,
-};
+struct {
+    __uint(type, BPF_MAP_TYPE_ARRAY);
+    __type(key,   __u32);
+    __type(value, __u64);
+    __uint(max_entries, CNT_MAX);
+} TBL_NAME_CNT SEC(".maps");
 
 static inline int is_opt_on(uint32_t opt_idx)
 {
@@ -98,19 +103,14 @@ static inline int dispatch_ethtype(struct CTXTYPE *ctx, uint16_t ethtype)
     {
     case ETH_P_8021Q:
     case ETH_P_8021AD:
-        bpf_tail_call(ctx, &TBL_NAME_CB, CB_VLAN);
-        break;
+        return cb_vlan(ctx);
     case ETH_P_IP:
-        bpf_tail_call(ctx, &TBL_NAME_CB, CB_IP4);
-        break;
+        return cb_ip4(ctx);
     case ETH_P_IPV6:
-        bpf_tail_call(ctx, &TBL_NAME_CB, CB_IP6);
-        break;
+        return cb_ip6(ctx);
     default:
-        break;
+        return XDP_PASS;
     }
-
-    return -1;
 }
 
 // ethtype (in network order)
@@ -120,16 +120,12 @@ static inline int dispatch_ethtype_vlan(struct CTXTYPE *ctx, uint16_t ethtype)
     switch (ntohs(ethtype))
     {
     case ETH_P_IP:
-        bpf_tail_call(ctx, &TBL_NAME_CB, CB_IP4);
-        break;
+        return cb_ip4(ctx);
     case ETH_P_IPV6:
-        bpf_tail_call(ctx, &TBL_NAME_CB, CB_IP6);
-        break;
+        return cb_ip6(ctx);
     default:
-        break;
+        return XDP_PASS;
     }
-
-    return -1;
 }
 
 // proto (in network order)
@@ -139,20 +135,16 @@ static inline int dispatch_ippro(struct CTXTYPE *ctx, uint16_t proto)
     switch (proto)
     {
     case IPPROTO_UDP:
-        bpf_tail_call(ctx, &TBL_NAME_CB, CB_UDP);
-        break;
+        return cb_udp(ctx);
     case IPPROTO_TCP:
-        bpf_tail_call(ctx, &TBL_NAME_CB, CB_TCP);
-        break;
+        return cb_tcp(ctx);
     case IPPROTO_GRE:
         if (is_opt_on(OP_GRE))
-            bpf_tail_call(ctx, &TBL_NAME_CB, CB_GRE);
-        break;
+            return cb_gre(ctx);
+        return XDP_PASS;
     default:
-        break;
+        return XDP_PASS;
     }
-
-    return -1;
 }
 
 // port (in network order)
@@ -163,25 +155,30 @@ static inline int dispatch_port(struct CTXTYPE *ctx, uint16_t port)
     {
     case 4789:
         if (is_opt_on(OP_VXLAN))
-            bpf_tail_call(ctx, &TBL_NAME_CB, CB_VXLAN);
+            return cb_vxlan(ctx);
         break;
     case GTP1U_PORT:
         if (is_opt_on(OP_GTP))
-            bpf_tail_call(ctx, &TBL_NAME_CB, CB_GTP);
+            return cb_gtp(ctx);
         break;
     case GENEVE_UDP_PORT:
         if (is_opt_on(OP_GENEVE))
-            bpf_tail_call(ctx, &TBL_NAME_CB, CB_GENEVE);
+            return cb_geneve(ctx);
         break;
     default:
         break;
     }
 
-    return -1;
+    return XDP_PASS;
 }
 
-PROG(CB_NAME_ETH) (struct CTXTYPE *ctx)
+SEC("xdp")
+int xdp_rem_tnlhdr(struct CTXTYPE *ctx)
 {
+    // It seems 'Tail Call' is not supported in  LIBXDP,
+    // so make every 'tail call' to 'BPF to BPF' function call.
+    // Also change the function name from 'cb_eth' to 'xdp_rem_tnlhdr',
+    // which can be showed by tool 'xdp-loader'.
     void            *data_end;
     void            *data;
     struct          meta_info *meta;
@@ -221,11 +218,10 @@ PROG(CB_NAME_ETH) (struct CTXTYPE *ctx)
         bpf_debug("eth ofs - %d" DBGLR, meta->cur_ofs);
     }
 
-    dispatch_ethtype(ctx, eth->h_proto);
-    return XDP_PASS;
+    return dispatch_ethtype(ctx, eth->h_proto);
 }
 
-PROG(CB_NAME_VLAN) (struct CTXTYPE *ctx)
+static int cb_vlan(struct CTXTYPE *ctx)
 {
     void            *data_end;
     void            *data;
@@ -271,12 +267,10 @@ PROG(CB_NAME_VLAN) (struct CTXTYPE *ctx)
         bpf_debug("vlan ofs - %d" DBGLR, meta->cur_ofs);
     }
 
-    dispatch_ethtype_vlan(ctx, next_proto);
-
-    return XDP_PASS;
+    return dispatch_ethtype_vlan(ctx, next_proto);
 }
 
-PROG(CB_NAME_IP4) (struct CTXTYPE *ctx)
+static int cb_ip4(struct CTXTYPE *ctx)
 {
     void                *data_end;
     void                *data;
@@ -303,12 +297,10 @@ PROG(CB_NAME_IP4) (struct CTXTYPE *ctx)
         bpf_debug("ip4 ofs - %d" DBGLR, meta->cur_ofs);
     }
 
-    dispatch_ippro(ctx, iph->protocol);
-
-    return XDP_PASS;
+    return dispatch_ippro(ctx, iph->protocol);
 }
 
-PROG(CB_NAME_IP6) (struct CTXTYPE *ctx)
+static int cb_ip6(struct CTXTYPE *ctx)
 {
     void                *data_end;
     void                *data;
@@ -335,13 +327,11 @@ PROG(CB_NAME_IP6) (struct CTXTYPE *ctx)
         bpf_debug("ip6 ofs - %d" DBGLR, meta->cur_ofs);
     }
 
-    dispatch_ippro(ctx, ip6h->nexthdr);
-
-    return XDP_PASS;
+    return dispatch_ippro(ctx, ip6h->nexthdr);
 }
 
 //refer to gre_parse_header in linux kernel
-PROG(CB_NAME_GRE) (struct CTXTYPE *ctx)
+static int cb_gre(struct CTXTYPE *ctx)
 {
     void                *data_end;
     void                *data;
@@ -399,13 +389,11 @@ PROG(CB_NAME_GRE) (struct CTXTYPE *ctx)
         meta_cut->is_inner_ip4 = is_inner_ip4;
         meta_cut->cn_id = CNT_GRE;
 
-        bpf_tail_call(ctx, &TBL_NAME_CB, CB_CUT_1);
+        return cb_cut_1(ctx);
     }
-
-    return XDP_PASS;
 }
 
-PROG(CB_NAME_UDP) (struct CTXTYPE *ctx)
+static int cb_udp(struct CTXTYPE *ctx)
 {
     void                *data_end;
     void                *data;
@@ -433,12 +421,10 @@ PROG(CB_NAME_UDP) (struct CTXTYPE *ctx)
         bpf_debug("udp ofs - %d" DBGLR, meta->cur_ofs);
     }
 
-    dispatch_port(ctx, udph->dest);
-
-    return XDP_PASS;
+    return dispatch_port(ctx, udph->dest);
 }
 
-PROG(CB_NAME_TCP) (struct CTXTYPE *ctx)
+static int cb_tcp(struct CTXTYPE *ctx)
 {
     void                *data_end;
     void                *data;
@@ -466,12 +452,10 @@ PROG(CB_NAME_TCP) (struct CTXTYPE *ctx)
         bpf_debug("tcp ofs - %d" DBGLR,meta->cur_ofs);
     }
 
-    dispatch_port(ctx, tcph->dest);
-
-    return XDP_PASS;
+    return dispatch_port(ctx, tcph->dest);
 }
 
-PROG(CB_NAME_VXLAN) (struct CTXTYPE *ctx)
+static int cb_vxlan(struct CTXTYPE *ctx)
 {
     void                *data_end;
     void                *data;
@@ -509,13 +493,11 @@ PROG(CB_NAME_VXLAN) (struct CTXTYPE *ctx)
         meta_cut->hdr_len[1] = cut_len;
         meta_cut->cn_id = CNT_VXLAN;
 
-        bpf_tail_call(ctx, &TBL_NAME_CB, CB_CUT_2);
+        return cb_cut_2(ctx);
     }
-
-    return XDP_PASS;
 }
 
-PROG(CB_NAME_GTP) (struct CTXTYPE *ctx)
+static int cb_gtp(struct CTXTYPE *ctx)
 {
     void                *data_end;
     void                *data;
@@ -578,13 +560,11 @@ PROG(CB_NAME_GTP) (struct CTXTYPE *ctx)
         meta_cut->is_inner_ip4 = is_inner_ip4;
         meta_cut->cn_id = CNT_GTP;
 
-        bpf_tail_call(ctx, &TBL_NAME_CB, CB_CUT_1);
+        return cb_cut_1(ctx);
     }
-
-    return XDP_PASS;
 }
 
-PROG(CB_NAME_GENEVE) (struct CTXTYPE *ctx)
+static int cb_geneve(struct CTXTYPE *ctx)
 {
     void                *data_end;
     void                *data;
@@ -627,14 +607,12 @@ PROG(CB_NAME_GENEVE) (struct CTXTYPE *ctx)
         meta_cut->hdr_len[1] = cut_len;
         meta_cut->cn_id = CNT_GENEVE;
 
-        bpf_tail_call(ctx, &TBL_NAME_CB, CB_CUT_2);
+        return cb_cut_2(ctx);
     }
-
-    return XDP_PASS;
 }
 
 // remove inserted header in the middle
-PROG(CB_NAME_CUT_1) (struct CTXTYPE *ctx)
+static int cb_cut_1(struct CTXTYPE *ctx)
 {
     void                    *data_end;
     void                    *data;
@@ -672,7 +650,8 @@ PROG(CB_NAME_CUT_1) (struct CTXTYPE *ctx)
         }
 
         // move eth + vlan headear forward to strip the gtp tunnel header
-        for (int i=0; i <22; i++)
+        // Not sure what below codes do, but compiled BPF fails to load with them.
+	/*for (int i=0; i <22; i++)
         {
             char *src, *dst;
 
@@ -688,7 +667,7 @@ PROG(CB_NAME_CUT_1) (struct CTXTYPE *ctx)
                 return XDP_PASS;
 
             *dst = *src;
-        }
+        }*/
 
         if (meta->is_inner_ip4 != meta->is_outer_ip4)
         {
@@ -720,7 +699,7 @@ PROG(CB_NAME_CUT_1) (struct CTXTYPE *ctx)
 }
 
 //remove inserted header from head
-PROG(CB_NAME_CUT_2) (struct CTXTYPE *ctx)
+static int cb_cut_2(struct CTXTYPE *ctx)
 {
     void                    *data_end;
     void                    *data;
@@ -748,4 +727,3 @@ PROG(CB_NAME_CUT_2) (struct CTXTYPE *ctx)
 
     return XDP_PASS;
 }
-

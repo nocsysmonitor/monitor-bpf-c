@@ -14,6 +14,7 @@
 
 #include <bpf/bpf.h>
 #include <bpf/libbpf.h>
+#include <xdp/libxdp.h>
 #include <argp.h>
 
 #include "xdp_util_user.h"
@@ -28,6 +29,10 @@
 #define len_help        "Length of payload for calculating hash key" \
                         "(in bytes, set 0 to use whole packet," \
                         " limit: " xstr(LOOP_MAX_LEN_) ")."
+#define pri_help	"Specify the priority of the XDP program. " \
+	                "Default is 20 for this program, smaller number" \
+			" runs first."
+#define DEFAULT_XDP_PRIORITY	20
 
 /* DATA TYPE DECLARATIONS
  */
@@ -38,6 +43,7 @@ typedef struct {
     int     hlen;
     int     lst_info;
     int     detach;
+    int     priority;
 } arguments_t;
 
 typedef struct {
@@ -51,6 +57,7 @@ static arguments_t user_arguments = {
     .dbg_lvl = 0,
     .if_idx  = -1,
     .hlen    = -1,
+    .priority= DEFAULT_XDP_PRIORITY,
 };
 
 static struct argp_option user_options[] = {
@@ -60,19 +67,8 @@ static struct argp_option user_options[] = {
     { 0,         'u', 0, 0,           det_help,            0 },
     { 0,         't', "us", 0,        per_help,            0 },
     { 0,         'h', "bytes", 0,     len_help,            0 },
+    { 0,         'p', "priority", 0,  pri_help,            0 },
     { 0}
-};
-
-static prog_ele_t cb_prog_ar [] = {
-    { xstr(CB_NAME_P0),    0 },
-    { xstr(CB_NAME_P1),    1 },
-    { xstr(CB_NAME_P1),    2 },
-    { xstr(CB_NAME_P1),    3 },
-    { xstr(CB_NAME_P1),    4 },
-    { xstr(CB_NAME_P1),    5 },
-    { xstr(CB_NAME_P1),    6 },
-    { xstr(CB_NAME_FIN),   7 },
-    { xstr(CB_NAME_MATCH), 8 },
 };
 
 static char *opt_name_ar [] = {
@@ -120,6 +116,15 @@ user_parse_opt(int key, char *arg, struct argp_state *state)
         arguments_p->hlen = strtoul(arg, NULL, 0);
         if (errno != 0) {
             argp_error(state, "Invalid length \"%s\"", arg);
+            return errno;
+        }
+        break;
+
+    case 'p':
+        errno = 0;
+        arguments_p->priority = strtoul(arg, NULL, 0);
+        if (errno != 0) {
+            argp_error(state, "Invalid priority \"%s\"", arg);
             return errno;
         }
         break;
@@ -237,12 +242,10 @@ static void update_options(arguments_t *arg_p, int opt_map_fd) {
         fprintf(stderr, "ERR: set option dbg failed\n");
     }
 
-    if (arg_p->hlen != -1 ) {
-        value = arg_p->hlen;
-        ret = bpf_map_update_elem(opt_map_fd, (uint32_t []) {OP_HLEN}, &value, BPF_ANY);
-        if (ret < 0) {
-            fprintf(stderr, "ERR: set option hash len failed\n");
-        }
+    value = (arg_p->hlen != -1) ? arg_p->hlen : DFLT_HASH_LEN;
+    ret = bpf_map_update_elem(opt_map_fd, (uint32_t []) {OP_HLEN}, &value, BPF_ANY);
+    if (ret < 0) {
+        fprintf(stderr, "ERR: set option hash len failed\n");
     }
 }
 
@@ -277,9 +280,9 @@ int main(int argc, char **argv) {
     char *prog_name_p;
     char kern_prog_name[256]; //basename, ex: xxx
     char kern_prog_path[256]; //including path, ex yyy/yyy/xxx
-    int main_fd, err, fd, cb_tbl_fd, hash_tbl_fd;
-    struct bpf_program *prog;
+    int err, hash_tbl_fd;
     struct bpf_object *obj;
+    struct xdp_program *prog;
 
     /* Our argp parser. */
     static struct argp argp = { user_options, user_parse_opt, args_doc, prog_doc };
@@ -301,17 +304,6 @@ int main(int argc, char **argv) {
         return 0;
     }
 
-    // detach program first
-    if (user_arguments.detach) {
-        /* Detach XDP from interface */
-        if ((err = bpf_set_link_xdp_fd(
-                    user_arguments.if_idx, -1, XDP_FLAGS_UPDATE_IF_NOEXIST)) < 0) {
-            fprintf(stderr, "ERR: link set xdp unload failed (err=%d):%s\n",
-                    err, strerror(-err));
-            return err;
-        }
-    }
-
     snprintf(kern_prog_name, sizeof(kern_prog_name), "%s_kern.o", prog_name_p);
     if (NULL == get_kern_prog_path(kern_prog_path, sizeof(kern_prog_path), kern_prog_name)) {
         fprintf(stderr, "ERR: failed to get path of BPF-OBJ file(%s)\n",
@@ -319,53 +311,17 @@ int main(int argc, char **argv) {
         return -1;
     }
 
-    obj = bpf_object__open_file(kern_prog_path, NULL);
-    if (libbpf_get_error(obj)) {
-        fprintf(stderr, "ERR: opening BPF object file failed\n");
-        return 0;
-    }
-
-    /* load BPF program */
-    if (bpf_object__load(obj)) {
-        fprintf(stderr, "ERR: loading BPF object file failed\n");
-        return -1;
-    }
-
-    process_user_options(&user_arguments, NULL, obj);
-
-    cb_tbl_fd = bpf_object__find_map_fd_by_name(obj, xstr(TBL_NAME_CB));
-    if (cb_tbl_fd < 0) {
-        fprintf(stderr, "ERR: finding %s in obj file failed\n", xstr(TBL_NAME_CB));
-        return -1;
-    }
-
-    hash_tbl_fd = bpf_object__find_map_fd_by_name(obj, xstr(TBL_NAME_HASH));
-    if (hash_tbl_fd < 0) {
-        fprintf(stderr, "ERR: finding %s in obj file failed\n", xstr(TBL_NAME_HASH));
-        return -1;
-    }
-
-    /* install program to cb_table */
-    for (int idx = 0; idx < sizeof(cb_prog_ar) / sizeof(cb_prog_ar[0]); idx++) {
-        prog = bpf_object__find_program_by_name(obj, cb_prog_ar[idx].name_p);
-        if (!prog) {
-            printf("finding a prog in obj file failed - (%s)\n", cb_prog_ar[idx].name_p);
-            return -1;
-        }
-
-        fd = bpf_program__fd(prog);
-        bpf_map_update_elem(cb_tbl_fd, &idx, &fd, BPF_ANY);
-
-        if (idx == 0) {
-            main_fd = fd;
-        }
-    }
+    /* Open XDP program file and get bpf_obj from file  using LIBXDP */
+    prog = xdp_program__open_file(kern_prog_name, "xdp", NULL);
+    obj = xdp_program__bpf_obj(prog);
+    xdp_program__set_run_prio(prog, user_arguments.priority);
 
     /* Attach BPF program to interface */
-    err = bpf_set_link_xdp_fd(user_arguments.if_idx, main_fd, XDP_FLAGS_UPDATE_IF_NOEXIST);
+    silence_libbpf_logging(); // Comment this out for debugging
+    err = xdp_program__attach_multi(&prog, 1, user_arguments.if_idx, XDP_MODE_SKB, 0);
     if (err) {
-        fprintf(stderr, "ERR: ifindex(%d) link set xdp fd failed (%d): %s\n",
-            user_arguments.if_idx, err, strerror(-err));
+        fprintf(stderr, "ERR: attaching XDP program\n");
+        xdp_program__detach(prog, user_arguments.if_idx, XDP_MODE_SKB, 0);
         return err;
     }
     printf("BPF attatched to interface: %d\n", user_arguments.if_idx);
@@ -374,7 +330,17 @@ int main(int argc, char **argv) {
     err = pin_maps_in_bpf_object(obj, prog_name_p, NULL, 1);
     if (err) {
         fprintf(stderr, "ERR: pinning maps\n");
+        xdp_program__detach(prog, user_arguments.if_idx, XDP_MODE_SKB, 0);
         return err;
+    }
+
+    process_user_options(&user_arguments, prog_name_p, NULL);
+
+    hash_tbl_fd = bpf_object__find_map_fd_by_name(obj, xstr(TBL_NAME_HASH));
+    if (hash_tbl_fd < 0) {
+        fprintf(stderr, "ERR: finding %s in obj file failed\n", xstr(TBL_NAME_HASH));
+        xdp_program__detach(prog, user_arguments.if_idx, XDP_MODE_SKB, 0);
+        return -1;
     }
 
     /* Keep going */
@@ -391,12 +357,7 @@ int main(int argc, char **argv) {
     pin_maps_in_bpf_object(obj, prog_name_p, NULL, 0);
 
     /* Detach XDP from interface */
-    if ((err = bpf_set_link_xdp_fd(user_arguments.if_idx, -1, XDP_FLAGS_UPDATE_IF_NOEXIST)) < 0) {
-        fprintf(stderr, "ERR: link set xdp unload failed (err=%d):%s\n",
-            err, strerror(-err));
-        return err;
-    }
-
+    xdp_program__detach(prog, user_arguments.if_idx, XDP_MODE_SKB, 0);
     printf("Done\n");
     return 0;
 }
