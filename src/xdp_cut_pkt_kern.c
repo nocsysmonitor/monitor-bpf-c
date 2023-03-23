@@ -18,26 +18,26 @@
 #include "xdp_cut_pkt_def.h"
 
 // Creates maps, specify name, type, key/value size, and map size.
-MAPS(TBL_NAME_SIP) = {
-    .type = BPF_MAP_TYPE_HASH,
-    .key_size = sizeof(uint32_t),
-    .value_size = sizeof(uint32_t),
-    .max_entries = MAX_NBR_SIP_TBL,
-};
+struct {
+    __uint(type, BPF_MAP_TYPE_HASH);
+    __type(key,   __u32);
+    __type(value, __u32);
+    __uint(max_entries, MAX_NBR_SIP_TBL);
+} TBL_NAME_SIP SEC(".maps");
 
-MAPS(TBL_NAME_CNT) = {
-    .type = BPF_MAP_TYPE_ARRAY,
-    .key_size = sizeof(int),
-    .value_size = sizeof(uint64_t),
-    .max_entries = 1,
-};
+struct {
+    __uint(type, BPF_MAP_TYPE_ARRAY);
+    __type(key,   __u32);
+    __type(value, __u64);
+    __uint(max_entries, 1);
+} TBL_NAME_CNT SEC(".maps");
 
-MAPS(TBL_NAME_EN_SIP) = {
-    .type = BPF_MAP_TYPE_ARRAY,
-    .key_size = sizeof(int),
-    .value_size = sizeof(uint32_t),
-    .max_entries = 1,
-};
+struct {
+    __uint(type, BPF_MAP_TYPE_ARRAY);
+    __type(key,   __u32);
+    __type(value, __u32);
+    __uint(max_entries, 1);
+} TBL_NAME_EN_SIP SEC(".maps");
 
 // Replace BCC helpers if used in inline.
 static inline int is_en_sip_filter(void) {
@@ -93,7 +93,7 @@ static inline void update_mod_c (void) {
 // Content of SEC() can be anything, it is userspace program decides where to hook this BPF program.
 // If multiple BPF programs locate in same file, use different content to identify.
 SEC("xdp")
-int myprogram(struct xdp_md *ctx) {
+int xdp_cut_pkt(struct xdp_md *ctx) {
     // Only need to replace BCC helpers if any.
     // Some BPF helpers might be different in various kernel version, those shall be considered, too.
 

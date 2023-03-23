@@ -205,3 +205,20 @@ int open_bpf_map_file(
     return fd;
 }
 
+/* For suppressing useless warning message from libbpf */
+int libbpf_silent_func(
+    enum libbpf_print_level level,
+    const char *format,
+    va_list args)
+{
+    (void)level;
+    (void)format;
+    (void)args;
+    return 0;
+}
+
+void silence_libbpf_logging()
+{
+    libbpf_set_print(libbpf_silent_func);
+}
+

@@ -41,5 +41,13 @@ int open_bpf_map_file(
     char *file_path_p,
     struct bpf_map_info *info);
 
+/* For suppressing useless warning message from libbpf */
+int libbpf_silent_func(
+    enum libbpf_print_level level,
+    const char *format,
+    va_list args);
+
+void silence_libbpf_logging();
+
 #endif
 

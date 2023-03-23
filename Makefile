@@ -5,7 +5,8 @@
 TARGETS := xdp_cut_pkt xdp_dedup xdp_rem_tnlhdr
 
 
-LIBBPF_SRC= /home/vagrant/libbpf-0.4.0/src
+LIBBPF_SRC= /home/vagrant/xdp-tools/lib/libbpf/src
+LIBXDP_SRC= /home/vagrant/xdp-tools/lib/libxdp
 OUTPUT_DIR= ${PWD}/build
 SRC_DIR   = ${PWD}/src
 DEP_DIR   = ${PWD}/.dep
@@ -36,6 +37,8 @@ CLFLAGS := -g -O2 -Wall
 CLFLAGS += -I${SRC_DIR}/inc
 CLFLAGS += -I${LIBBPF_SRC}/build/usr/include/
 CLFLAGS += -I${LIBBPF_SRC}
+CLFLAGS += -I${LIBXDP_SRC}/build/usr/local/include/
+CLFLAGS += -I${LIBXDP_SRC}
 CLFLAGS += -I/usr/include/
 
 # Use ITMP=1 to generate intermediate files
@@ -57,6 +60,7 @@ USER_OBJECTS_UTIL = $(patsubst %.c, $(OUTPUT_DIR)/lib/%.o, $(USER_SOURCES_UTIL))
 #
 # The static libbpf library
 LIBBPF = ${LIBBPF_SRC}/libbpf.a
+LIBXDP = ${LIBXDP_SRC}/libxdp.a
 
 
 # Allows pointing LLC/CLANG to another LLVM backend, redefine on cmdline:
@@ -102,7 +106,7 @@ ${OUTPUT_DIR}/lib/%.o: %.c $(DEP_DIR)/%.d
 # generate user targets
 ${OUTPUT_DIR}/%: %_user.c $(USER_OBJECTS_UTIL) $(DEP_DIR)/%.d
 	$(CLANG) $(DEPFLAGS) $(CLFLAGS) $(LDFLAGS) $< \
-	    -o $@ $(USER_OBJECTS_UTIL) $(LIBBPF) -lz
+	    -o $@ $(USER_OBJECTS_UTIL) $(LIBXDP) $(LIBBPF) -lz
 
 .DEFAULT_GOAL := all
 
