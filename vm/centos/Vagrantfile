@@ -89,10 +89,10 @@ Vagrant.configure("2") do |config|
     SHELL
     vm1.vm.provision "shell", privileged: true, reboot: true
     vm1.vm.provision "shell", privileged: false, inline: <<-SHELL
+        sudo dnf config-manager --set-enabled powertools
         sudo dnf install clang llvm elfutils-libelf-devel libcap-devel perf net-tools vim -y
-        sudo dnf --enablerepo=powertools install libpcap-devel -y
-        sudo yum -y install gcc automake autoconf libtool make glibc-devel-2.28-164.el8.i686
-        sudo dnf update -y
+        sudo dnf install libpcap-devel epel-release epel-next-release -y
+        sudo yum -y install gcc automake autoconf libtool make glibc-devel-2.28-164.el8.i686 dpkg-devel dpkg-dev
 	git clone --depth 1 --branch v6.7.0 --recurse-submodules https://github.com/libbpf/bpftool.git
         cd bpftool/src
         make && sudo make install
